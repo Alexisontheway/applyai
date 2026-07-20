@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# TypeScript
+*.tsbuildinfo
+packages/shared/dist/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# ML service
+ml-service/__pycache__/
+ml-service/venv/
+ml-service/.venv/
+ml-service/models/
+*.pyc
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+.puppeteerrc.cache/

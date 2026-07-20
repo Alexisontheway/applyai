@@ -1,0 +1,9 @@
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+sentence-transformers==3.4.*
+scikit-learn==1.6.*
+playwright==1.52.*
+ollama==0.4.*
+pandas==2.2.*
+numpy==2.1.*
+pypdf2==0.4.*
