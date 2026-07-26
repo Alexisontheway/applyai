@@ -12,7 +12,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { api } from '../lib/api';
-import { Plus } from 'lucide-react';
+import { Plus, X, Trash2 } from 'lucide-react';
 
 interface ApplicationRow {
   applications: {
@@ -20,8 +20,10 @@ interface ApplicationRow {
     status: string;
     notes: string | null;
     matchScore: string | null;
+    createdAt: string;
   };
   jobs: {
+    id: string;
     title: string;
     company: string;
   } | null;
@@ -54,7 +56,7 @@ function Column({ id, label, color, count, children }: { id: string; label: stri
   );
 }
 
-function Card({ id, title, company }: { id: string; title: string; company: string }) {
+function Card({ id, title, company, onClick }: { id: string; title: string; company: string; onClick: () => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id });
   const style = transform
     ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: isDragging ? 50 : undefined }
@@ -64,6 +66,10 @@ function Card({ id, title, company }: { id: string; title: string; company: stri
     <div
       ref={setNodeRef}
       style={style}
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => { if (e.key === 'Enter') onClick(); }}
       className={`bg-dark-900 border border-neon/10 p-3 hover:border-neon/30 transition-colors ${isDragging ? 'opacity-30' : 'cursor-grab active:cursor-grabbing'}`}
       {...listeners}
       {...attributes}
@@ -83,12 +89,25 @@ function CardContent({ title, company }: { title: string; company: string }) {
   );
 }
 
+const statusLabels: Record<string, string> = {
+  saved: 'Saved',
+  applied: 'Applied',
+  screening: 'Screening',
+  interview: 'Interview',
+  offer: 'Offer',
+  rejected: 'Rejected',
+  ghosted: 'Ghosted',
+};
+
 export default function PipelinePage() {
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState('');
   const [company, setCompany] = useState('');
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [selectedApp, setSelectedApp] = useState<ApplicationRow | null>(null);
+  const [editNotes, setEditNotes] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data: applications } = useQuery({
     queryKey: ['applications'],
@@ -131,6 +150,23 @@ export default function PipelinePage() {
     },
   });
 
+  const updateNotesMutation = useMutation({
+    mutationFn: ({ id, notes }: { id: string; notes: string }) =>
+      api.patch(`/applications/${id}`, { notes: notes || null }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['applications'] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/applications/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['applications'] });
+      setSelectedApp(null);
+      setConfirmDelete(false);
+    },
+  });
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
@@ -148,6 +184,29 @@ export default function PipelinePage() {
     const currentApp = applications?.find((a) => a.applications.id === appId);
     if (!currentApp || currentApp.applications.status === newStatus) return;
     updateStatusMutation.mutate({ id: appId, status: newStatus });
+  }
+
+  function openDetail(app: ApplicationRow) {
+    setSelectedApp(app);
+    setEditNotes(app.applications.notes ?? '');
+    setConfirmDelete(false);
+  }
+
+  function closeDetail() {
+    if (updateNotesMutation.isPending) return;
+    setSelectedApp(null);
+    setEditNotes('');
+    setConfirmDelete(false);
+  }
+
+  function handleSaveNotes() {
+    if (!selectedApp) return;
+    updateNotesMutation.mutate({ id: selectedApp.applications.id, notes: editNotes });
+  }
+
+  function handleDelete() {
+    if (!selectedApp) return;
+    deleteMutation.mutate(selectedApp.applications.id);
   }
 
   const appList = applications ?? [];
@@ -217,6 +276,7 @@ export default function PipelinePage() {
                     id={row.applications.id}
                     title={row.jobs?.title ?? 'Untitled'}
                     company={row.jobs?.company ?? 'Unknown'}
+                    onClick={() => openDetail(row)}
                   />
                 ))}
                 {items.length === 0 && (
@@ -235,6 +295,107 @@ export default function PipelinePage() {
           ) : null}
         </DragOverlay>
       </DndContext>
+
+      {selectedApp && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/60" onClick={closeDetail} />
+          <div className="relative w-full max-w-md bg-dark-900 border-l border-neon/10 shadow-2xl overflow-y-auto">
+            <div className="sticky top-0 bg-dark-900 border-b border-neon/10 p-4 flex items-center justify-between">
+              <h2 className="text-white font-semibold text-lg truncate mr-4">
+                {selectedApp.jobs?.title ?? 'Untitled'}
+              </h2>
+              <button onClick={closeDetail} className="text-gray-400 hover:text-white transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-5">
+              <div className="space-y-2">
+                <p className="text-gray-400 text-xs font-mono uppercase tracking-wider">Company</p>
+                <p className="text-white">{selectedApp.jobs?.company ?? 'Unknown'}</p>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-gray-400 text-xs font-mono uppercase tracking-wider">Status</p>
+                <span className="inline-block bg-neon/10 text-neon text-xs font-semibold px-2 py-1">
+                  {statusLabels[selectedApp.applications.status] ?? selectedApp.applications.status}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-gray-400 text-xs font-mono uppercase tracking-wider">Notes</p>
+                <textarea
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  rows={4}
+                  className="w-full bg-dark-800 border border-neon/10 text-white px-3 py-2 text-sm focus:border-neon/50 focus:outline-none resize-none"
+                  placeholder="Add notes about this application..."
+                />
+                {editNotes !== (selectedApp.applications.notes ?? '') && (
+                  <button
+                    onClick={handleSaveNotes}
+                    disabled={updateNotesMutation.isPending}
+                    className="bg-neon text-dark-900 px-4 py-1.5 text-sm font-semibold disabled:opacity-50"
+                  >
+                    {updateNotesMutation.isPending ? 'Saving...' : 'Save Notes'}
+                  </button>
+                )}
+              </div>
+
+              {selectedApp.applications.matchScore && (
+                <div className="space-y-2">
+                  <p className="text-gray-400 text-xs font-mono uppercase tracking-wider">Match Score</p>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-2 bg-dark-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-neon rounded-full transition-all"
+                        style={{ width: `${Math.min(Number(selectedApp.applications.matchScore), 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-neon text-sm font-mono">{Number(selectedApp.applications.matchScore).toFixed(0)}%</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <p className="text-gray-400 text-xs font-mono uppercase tracking-wider">Created</p>
+                <p className="text-gray-300 text-sm">{new Date(selectedApp.applications.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+              </div>
+
+              <div className="border-t border-neon/10 pt-4">
+                {!confirmDelete ? (
+                  <button
+                    onClick={() => setConfirmDelete(true)}
+                    className="flex items-center gap-2 text-red-400 hover:text-red-300 text-sm transition-colors"
+                  >
+                    <Trash2 size={16} />
+                    Delete application
+                  </button>
+                ) : (
+                  <div className="bg-red-500/10 border border-red-500/20 p-3">
+                    <p className="text-red-400 text-xs mb-2">Are you sure? This cannot be undone.</p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleDelete}
+                        disabled={deleteMutation.isPending}
+                        className="bg-red-500 text-white px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+                      >
+                        {deleteMutation.isPending ? 'Deleting...' : 'Yes, delete'}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(false)}
+                        className="text-gray-400 px-3 py-1.5 text-xs hover:text-white"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

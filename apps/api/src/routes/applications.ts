@@ -111,3 +111,17 @@ applicationRoutes.patch('/:id', zValidator('json', updateApplicationSchema), asy
   const updated = await db.select().from(applications).where(eq(applications.id, c.req.param('id')));
   return c.json({ success: true, data: updated[0] });
 });
+
+applicationRoutes.delete('/:id', async (c) => {
+  const user = c.get('user');
+  const appId = c.req.param('id');
+
+  const existing = await db
+    .select()
+    .from(applications)
+    .where(and(eq(applications.id, appId), eq(applications.userId, user.id)));
+  if (!existing[0]) return c.json({ success: false, error: 'Not found' }, 404);
+
+  await db.delete(applications).where(and(eq(applications.id, appId), eq(applications.userId, user.id)));
+  return c.json({ success: true });
+});
