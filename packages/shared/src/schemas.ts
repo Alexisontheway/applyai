@@ -67,3 +67,11 @@ export const createCompanySchema = z.object({
   techStack: z.array(z.string()).optional(),
   notes: z.string().optional(),
 });
+
+// --- Scraping ---
+export const scrapeJobsSchema = z.object({
+  keywords: z.string().min(1).max(255),
+  location: z.string().max(255).optional(),
+  maxResults: z.number().int().min(1).max(100).default(25),
+  sources: z.array(z.enum(jobSource)).optional(),
+});

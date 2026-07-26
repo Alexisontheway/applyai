@@ -2,13 +2,35 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { createApplicationSchema, updateApplicationSchema } from '@applyai/shared/schemas';
 import { db } from '../db';
-import { applications, jobs } from '../db/schema';
+import { applications, jobs, resumes } from '../db/schema';
 import { requireAuth } from '../middleware/auth';
 import { eq, and } from 'drizzle-orm';
 
 export const applicationRoutes = new Hono();
 
 applicationRoutes.use('*', requireAuth);
+
+async function computeMatchScore(resumeText: string, jdText: string): Promise<number | null> {
+  if (!resumeText || !jdText) return null;
+  const mlBaseUrl = process.env.ML_SERVICE_URL || 'http://localhost:5000';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(`${mlBaseUrl}/match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resume_text: resumeText, jd_text: jdText }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.match_score ?? null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 applicationRoutes.get('/', async (c) => {
   const user = c.get('user');
@@ -36,13 +58,29 @@ applicationRoutes.post('/', zValidator('json', createApplicationSchema), async (
   const body = c.req.valid('json');
   const id = crypto.randomUUID();
 
+  let matchScore = body.matchScore ?? null;
+
+  if (matchScore === null) {
+    const job = await db.select().from(jobs).where(eq(jobs.id, body.jobId));
+    if (job[0]) {
+      const resume = body.resumeId
+        ? await db.select().from(resumes).where(eq(resumes.id, body.resumeId))
+        : null;
+      const resumeText = resume[0]?.parsedText || null;
+      const jdText = job[0].description || null;
+      if (resumeText && jdText) {
+        matchScore = await computeMatchScore(resumeText, jdText);
+      }
+    }
+  }
+
   await db.insert(applications).values({
     id,
     userId: user.id,
     jobId: body.jobId,
     status: body.status,
     resumeId: body.resumeId,
-    matchScore: body.matchScore?.toString() ?? null,
+    matchScore: matchScore !== null ? matchScore.toString() : null,
     notes: body.notes,
     followUpDate: body.followUpDate,
   });
@@ -62,11 +100,11 @@ applicationRoutes.patch('/:id', zValidator('json', updateApplicationSchema), asy
   if (!existing[0]) return c.json({ success: false, error: 'Not found' }, 404);
 
   const updateData: Record<string, unknown> = {};
-  if (body.status) updateData.status = body.status;
-  if (body.notes) updateData.notes = body.notes;
-  if (body.followUpDate) updateData.followUpDate = body.followUpDate;
-  if (body.resumeId) updateData.resumeId = body.resumeId;
-  if (body.matchScore !== undefined) updateData.matchScore = body.matchScore.toString();
+  if (body.status !== undefined) updateData.status = body.status;
+  if (body.notes !== undefined) updateData.notes = body.notes ?? null;
+  if (body.followUpDate !== undefined) updateData.followUpDate = body.followUpDate ?? null;
+  if (body.resumeId !== undefined) updateData.resumeId = body.resumeId ?? null;
+  if (body.matchScore !== undefined) updateData.matchScore = body.matchScore !== null ? body.matchScore.toString() : null;
   updateData.updatedAt = new Date();
 
   await db.update(applications).set(updateData).where(eq(applications.id, c.req.param('id')));

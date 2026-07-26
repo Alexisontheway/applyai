@@ -2,6 +2,21 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { Briefcase, Send, CheckCircle, XCircle } from 'lucide-react';
 
+// Shape returned by GET /api/applications (Drizzle leftJoin)
+interface ApplicationRow {
+  applications: {
+    id: string;
+    status: string;
+    notes: string | null;
+    matchScore: string | null;
+    createdAt: string;
+  };
+  jobs: {
+    title: string;
+    company: string;
+  } | null;
+}
+
 const statsCards = [
   { label: 'Saved', icon: Briefcase, color: 'text-blue-400', filter: 'saved' },
   { label: 'Applied', icon: Send, color: 'text-yellow-400', filter: 'applied' },
@@ -12,13 +27,13 @@ const statsCards = [
 export default function DashboardPage() {
   const { data: applications } = useQuery({
     queryKey: ['applications'],
-    queryFn: () => api.get<unknown[]>('/applications'),
+    queryFn: () => api.get<ApplicationRow[]>('/applications'),
   });
 
-  const counts = (applications as Array<{ status: string }>) ?? [];
+  const rows = applications ?? [];
   const stats = statsCards.map(({ label, icon: Icon, color, filter }) => ({
     label,
-    value: counts.filter((a) => a.status === filter).length,
+    value: rows.filter((a) => a.applications.status === filter).length,
     icon: Icon,
     color,
   }));
@@ -45,7 +60,7 @@ export default function DashboardPage() {
 
       <div className="border border-neon/10 bg-dark-800/30 p-6">
         <h2 className="text-white font-semibold mb-4">Recent Applications</h2>
-        {counts.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="text-gray-500 text-sm">
             No applications yet. Add your first job in the{' '}
             <a href="/pipeline" className="text-neon hover:underline">
@@ -55,14 +70,14 @@ export default function DashboardPage() {
           </p>
         ) : (
           <div className="space-y-2">
-            {counts.slice(0, 5).map((app: Record<string, unknown>) => (
+            {rows.slice(0, 5).map((row) => (
               <div
-                key={app.id as string}
+                key={row.applications.id}
                 className="flex items-center justify-between py-2 border-b border-neon/5 last:border-0"
               >
-                <span className="text-white text-sm">{(app as { job?: { title: string } }).job?.title ?? 'Job'}</span>
+                <span className="text-white text-sm">{row.jobs?.title ?? 'Untitled Job'}</span>
                 <span className="text-xs font-mono uppercase text-neon/60">
-                  {app.status as string}
+                  {row.applications.status}
                 </span>
               </div>
             ))}

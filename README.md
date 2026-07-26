@@ -157,10 +157,11 @@ npm run dev:web    # → http://localhost:5173
 | `GET` | `/api/jobs/:id` | Required | Get job details |
 | `DELETE` | `/api/jobs/:id` | Required | Delete job |
 | `GET` | `/api/applications` | Required | List applications (with joined job data) |
-| `POST` | `/api/applications` | Required | Create application |
+| `POST` | `/api/applications` | Required | Create application (auto-computes match score) |
 | `PATCH` | `/api/applications/:id` | Required | Update status/notes |
 | `GET` | `/api/resumes` | Required | List user's resumes |
 | `POST` | `/api/resumes` | Required | Upload resume metadata |
+| `POST` | `/api/jobs/scrape` | Required | Discover jobs via OSINT (Playwright) |
 
 ML endpoints (once deployed):
 
@@ -170,7 +171,8 @@ ML endpoints (once deployed):
 | `POST` | `/extract-skills` | Extract skills from JD text |
 | `POST` | `/gap-analysis` | Resume vs JD gap analysis |
 | `POST` | `/cover-letter` | Generate cover letter (Ollama) |
-| `POST` | `/scrape-job` | Scrape job from URL (Playwright) |
+| `POST` | `/scrape-job` | Scrape jobs from all sources |
+| `POST` | `/scrape-career-page` | Scrape a single company career page |
 
 ---
 
@@ -182,9 +184,10 @@ ML endpoints (once deployed):
 | **2 — Manual Pipeline** | Kanban board, manual job entry, status tracking | ✅ Complete |
 | **3 — Resume Manager** | Upload, version tagging, Supabase Storage | ✅ Scaffolded |
 | **4 — ML Matcher** | Sentence Transformers semantic scoring | ✅ Scaffolded |
-| **5 — OSINT Engine** | Playwright scrapers for job boards | ✅ Scaffolded |
-| **6 — Analytics** | Recharts dashboards, funnel metrics | ✅ Scaffolded |
-| **7 — Automation** | Ollama cover letters, follow-up reminders, email campaigns | 🚧 Planned |
+| **5 — OSINT Engine** | Playwright scrapers for job boards | ✅ Implementing |
+| **6 — Auto Match Score** | Auto-compute match when saving jobs | 🚧 In Progress |
+| **7 — Analytics** | Recharts dashboards, funnel metrics | ✅ Scaffolded |
+| **8 — Automation** | Ollama cover letters, follow-up reminders, email campaigns | 🚧 Planned |
 
 ---
 

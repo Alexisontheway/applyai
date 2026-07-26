@@ -44,6 +44,20 @@ resumeRoutes.delete('/:id', async (c) => {
     .where(and(eq(resumes.id, c.req.param('id')), eq(resumes.userId, user.id)));
   if (!existing[0]) return c.json({ success: false, error: 'Not found' }, 404);
 
+  const wasActive = existing[0].isActive;
   await db.delete(resumes).where(eq(resumes.id, c.req.param('id')));
+
+  // If we deleted the active resume, promote the next most-recent one
+  if (wasActive) {
+    const remaining = await db
+      .select()
+      .from(resumes)
+      .where(eq(resumes.userId, user.id))
+      .orderBy(resumes.createdAt);
+    if (remaining.length > 0) {
+      await db.update(resumes).set({ isActive: true }).where(eq(resumes.id, remaining[remaining.length - 1].id));
+    }
+  }
+
   return c.json({ success: true });
 });

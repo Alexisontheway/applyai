@@ -1,29 +1,75 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useRouter } from '@tanstack/react-router';
 import { authClient } from '../lib/auth';
 
 export default function LoginPage() {
   const router = useRouter();
+  const emailRef = useRef<HTMLInputElement>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  function extractError(err: unknown): string {
+    if (err instanceof Error) return err.message;
+    if (err && typeof err === 'object') {
+      const obj = err as Record<string, unknown>;
+      if (obj.error && typeof obj.error === 'object') {
+        const e = obj.error as Record<string, unknown>;
+        if (typeof e.message === 'string') return e.message;
+      }
+      if (typeof obj.message === 'string') return obj.message;
+    }
+    return 'Something went wrong';
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setIsSubmitting(true);
 
     try {
       if (isRegister) {
-        await authClient.signUp.email({ email, password, name });
+        if (!name.trim()) {
+          setError('Name is required');
+          setIsSubmitting(false);
+          return;
+        }
+        const res = await authClient.signUp.email({ email, password, name });
+        if (res.error) {
+          setError(extractError(res.error));
+          setIsSubmitting(false);
+          return;
+        }
       } else {
-        await authClient.signIn.email({ email, password });
+        const res = await authClient.signIn.email({ email, password });
+        if (res.error) {
+          setError(extractError(res.error));
+          setIsSubmitting(false);
+          return;
+        }
       }
-      router.invalidate();
+
+      const session = await authClient.getSession();
+      if (!session.data?.user) {
+        setError('Session not created. Please sign in.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      await router.navigate({ to: '/' });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong');
+      setError(extractError(err));
+    } finally {
+      setIsSubmitting(false);
     }
+  };
+
+  const switchMode = () => {
+    setIsRegister(!isRegister);
+    setError('');
   };
 
   return (
@@ -44,9 +90,10 @@ export default function LoginPage() {
               <input
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => { setName(e.target.value); setError(''); }}
                 className="w-full bg-dark-800 border border-neon/10 text-white px-4 py-2.5 text-sm focus:border-neon/50 focus:outline-none transition-colors"
                 required
+                autoFocus
               />
             </div>
           )}
@@ -54,11 +101,13 @@ export default function LoginPage() {
           <div>
             <label className="block text-sm text-gray-400 mb-1 font-mono">Email</label>
             <input
+              ref={emailRef}
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => { setEmail(e.target.value); setError(''); }}
               className="w-full bg-dark-800 border border-neon/10 text-white px-4 py-2.5 text-sm focus:border-neon/50 focus:outline-none transition-colors"
               required
+              autoFocus={!isRegister}
             />
           </div>
 
@@ -67,27 +116,32 @@ export default function LoginPage() {
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); setError(''); }}
               className="w-full bg-dark-800 border border-neon/10 text-white px-4 py-2.5 text-sm focus:border-neon/50 focus:outline-none transition-colors"
               required
               minLength={8}
             />
           </div>
 
-          {error && <p className="text-red-400 text-sm">{error}</p>}
+          {error && (
+            <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 px-3 py-2">{error}</p>
+          )}
 
           <button
             type="submit"
-            className="w-full bg-neon text-dark-900 font-semibold py-2.5 text-sm hover:bg-neon/90 transition-colors"
+            disabled={isSubmitting}
+            className="w-full bg-neon text-dark-900 font-semibold py-2.5 text-sm hover:bg-neon/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isRegister ? 'Create account' : 'Sign in'}
+            {isSubmitting
+              ? (isRegister ? 'Creating account...' : 'Signing in...')
+              : (isRegister ? 'Create account' : 'Sign in')}
           </button>
 
           <p className="text-center text-gray-500 text-sm">
             {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
             <button
               type="button"
-              onClick={() => setIsRegister(!isRegister)}
+              onClick={switchMode}
               className="text-neon hover:underline"
             >
               {isRegister ? 'Sign in' : 'Register'}

@@ -30,6 +30,11 @@ packages/shared/dist/
 logs/
 *.log
 npm-debug.log*
+# Root-level process logs (run: git rm --cached api*.log to untrack)
+api-stdout.log
+api-stderr.log
+api.log
+api.error.log
 
 # ML service
 ml-service/__pycache__/

@@ -11,10 +11,5 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
   },
-  socialProviders: {
-    google: {
-      clientId: process.env.GOOGLE_CLIENT_ID ?? '',
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-    },
-  },
+  trustedOrigins: (process.env.CLIENT_URL || 'http://localhost:5173').split(',').map((s) => s.trim()),
 });
