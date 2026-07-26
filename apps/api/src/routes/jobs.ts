@@ -1,10 +1,10 @@
-import { Hono } from 'hono';
+import { createJobSchema, scrapeJobsSchema, updateJobSchema } from '@applyai/shared/schemas';
 import { zValidator } from '@hono/zod-validator';
-import { createJobSchema, updateJobSchema, scrapeJobsSchema } from '@applyai/shared/schemas';
+import { and, eq } from 'drizzle-orm';
+import { Hono } from 'hono';
 import { db } from '../db';
 import { jobs } from '../db/schema';
 import { requireAuth } from '../middleware/auth';
-import { eq, and } from 'drizzle-orm';
 
 export const jobRoutes = new Hono();
 
@@ -18,7 +18,10 @@ jobRoutes.get('/', async (c) => {
 
 jobRoutes.get('/:id', async (c) => {
   const user = c.get('user');
-  const result = await db.select().from(jobs).where(eq(jobs.id, c.req.param('id')));
+  const result = await db
+    .select()
+    .from(jobs)
+    .where(eq(jobs.id, c.req.param('id')));
   const job = result[0];
   if (!job || job.userId !== user.id) {
     return c.json({ success: false, error: 'Not found' }, 404);
@@ -44,7 +47,10 @@ jobRoutes.post('/', zValidator('json', createJobSchema), async (c) => {
 
 jobRoutes.delete('/:id', async (c) => {
   const user = c.get('user');
-  const result = await db.select().from(jobs).where(eq(jobs.id, c.req.param('id')));
+  const result = await db
+    .select()
+    .from(jobs)
+    .where(eq(jobs.id, c.req.param('id')));
   const job = result[0];
   if (!job || job.userId !== user.id) {
     return c.json({ success: false, error: 'Not found' }, 404);
@@ -76,7 +82,10 @@ jobRoutes.patch('/:id', zValidator('json', updateJobSchema), async (c) => {
   if (body.description !== undefined) updateData.description = body.description ?? null;
   if (body.techStack !== undefined) updateData.techStack = body.techStack ?? null;
 
-  await db.update(jobs).set(updateData).where(and(eq(jobs.id, jobId), eq(jobs.userId, user.id)));
+  await db
+    .update(jobs)
+    .set(updateData)
+    .where(and(eq(jobs.id, jobId), eq(jobs.userId, user.id)));
   const updated = await db.select().from(jobs).where(eq(jobs.id, jobId));
   return c.json({ success: true, data: updated[0] });
 });

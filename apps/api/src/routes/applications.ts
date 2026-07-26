@@ -1,10 +1,10 @@
-import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
 import { createApplicationSchema, updateApplicationSchema } from '@applyai/shared/schemas';
+import { zValidator } from '@hono/zod-validator';
+import { and, eq } from 'drizzle-orm';
+import { Hono } from 'hono';
 import { db } from '../db';
 import { applications, jobs, resumes } from '../db/schema';
 import { requireAuth } from '../middleware/auth';
-import { eq, and } from 'drizzle-orm';
 
 export const applicationRoutes = new Hono();
 
@@ -112,10 +112,17 @@ applicationRoutes.patch('/:id', zValidator('json', updateApplicationSchema), asy
   if (body.notes !== undefined) updateData.notes = body.notes ?? null;
   if (body.followUpDate !== undefined) updateData.followUpDate = body.followUpDate ?? null;
   if (body.resumeId !== undefined) updateData.resumeId = body.resumeId ?? null;
-  if (body.matchScore !== undefined) updateData.matchScore = body.matchScore !== null ? body.matchScore.toString() : null;
+  if (body.matchScore !== undefined)
+    updateData.matchScore = body.matchScore !== null ? body.matchScore.toString() : null;
   updateData.updatedAt = new Date();
 
-  await db.update(applications).set(updateData).where(eq(applications.id, c.req.param('id')));
-  const updated = await db.select().from(applications).where(eq(applications.id, c.req.param('id')));
+  await db
+    .update(applications)
+    .set(updateData)
+    .where(eq(applications.id, c.req.param('id')));
+  const updated = await db
+    .select()
+    .from(applications)
+    .where(eq(applications.id, c.req.param('id')));
   return c.json({ success: true, data: updated[0] });
 });
