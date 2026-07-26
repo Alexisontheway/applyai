@@ -105,8 +105,14 @@ jobRoutes.post('/scrape', zValidator('json', scrapeJobsSchema), async (c) => {
       return c.json({ success: false, error: 'ML service scraping failed' }, 502);
     }
 
-    const mlData = await response.json();
-    const scrapedJobs = (mlData.data as Array<Record<string, unknown>>) || [];
+    const mlData: unknown = await response.json();
+    const scrapedJobs =
+      typeof mlData === 'object' &&
+      mlData !== null &&
+      'data' in mlData &&
+      Array.isArray(mlData.data)
+        ? (mlData.data as Array<Record<string, unknown>>)
+        : [];
     const createdJobs = [];
 
     for (const job of scrapedJobs) {

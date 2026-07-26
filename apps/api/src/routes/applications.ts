@@ -23,8 +23,16 @@ async function computeMatchScore(resumeText: string, jdText: string): Promise<nu
       signal: controller.signal,
     });
     if (!res.ok) return null;
-    const data = await res.json();
-    return data.match_score ?? null;
+    const data: unknown = await res.json();
+    if (
+      typeof data === 'object' &&
+      data !== null &&
+      'match_score' in data &&
+      typeof data.match_score === 'number'
+    ) {
+      return data.match_score;
+    }
+    return null;
   } catch {
     return null;
   } finally {
@@ -66,7 +74,7 @@ applicationRoutes.post('/', zValidator('json', createApplicationSchema), async (
       const resume = body.resumeId
         ? await db.select().from(resumes).where(eq(resumes.id, body.resumeId))
         : null;
-      const resumeText = resume[0]?.parsedText || null;
+      const resumeText = resume?.[0]?.parsedText || null;
       const jdText = job[0].description || null;
       if (resumeText && jdText) {
         matchScore = await computeMatchScore(resumeText, jdText);
