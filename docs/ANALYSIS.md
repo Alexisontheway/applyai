@@ -184,6 +184,10 @@ exits 0. Two of the blocked packages matter to this project (`esbuild` and
   the lockfile (`esbuild`, `fsevents`, `@biomejs/biome`, all
   `@embedded-postgres/*` platform packages), so a fresh clone is quiet on npm 12
   and unchanged on npm 10/11, which ignore the field.
+- Setup spawned its helper commands with `shell: true` and an argument array,
+  which Node 24 flags as `DEP0190` (the warning is visible in the user's log).
+  Both spawn sites now re-enter npm through `npm_execpath` with the current Node
+  binary, so no shell is involved and the warning is gone.
 - The Postgres half is a non-issue, and that is verifiable rather than assumed:
   `@embedded-postgres/windows-x64` ships real `initdb.exe`/`pg_ctl.exe` files and
   its `pg-symlinks.json` manifest is `[]`, so the blocked postinstall
@@ -218,12 +222,26 @@ Three fixes, all in `scripts/`:
 **c) The web entry file vanished from the working tree.** Vite failed with
 `Failed to load url /src/main.tsx (resolved id: D:/.../apps/web/src/main.tsx) in
 .../index.css. Does the file exist?` — five times, once per reload. The file is
-committed (121 files in this change include it) and present in a fresh clone.
-Deleting it here reproduced the message byte for byte, so the diagnosis is not
-speculation: the file was genuinely missing on disk. The likely culprit is the
-cloud-synced checkout path (`D:\_Organized\...`, which OneDrive manages), and
-the one-line recovery is `git checkout -- apps/web/src/main.tsx`. The README now
-tells Windows users to keep the checkout outside OneDrive.
+committed (121 files in this change include it) and present in a fresh clone
+here; deleting it reproduced the message byte for byte, so the diagnosis is not
+speculation: on that machine the file is genuinely not readable by Vite.
+
+The second run added the detail that rules out Git: it happened on a *fresh
+clone* of a commit that contains the file, so the file was written and then
+removed or locked by something outside Git. The same log also settled the path
+question — the shell prompt says `D:\PROJECTS 2026\...` while every tool reports
+`D:\_Organized\01_Dev\PROJECTS 2026\...`, so the projects folder is reached
+through a **junction/symlink** and the real tree lives under a folder whose name
+(`_Organized`) suggests exactly the kind of tool that moves files around.
+
+A machine-local file watcher cannot be debugged from a Linux box, so the answer
+is a diagnostic rather than another guess: **`npm run doctor`** (new) *reads*
+every file the app needs instead of listing it, which separates "missing"
+(`ENOENT` → `git restore <file>`) from "present but locked" (`EACCES`/`EPERM` →
+antivirus or sync client), warns when the checkout is reached through a junction
+or sits in a synced folder, and checks the runtime, the install-script
+approvals, `.env`, the database (including the exact half-migrated `resumes`
+state from (b)) and the ports. It exits non-zero when `npm run dev` would fail.
 
 None of this changes the Linux-side verification below; it is the reason the
 guides now distinguish "the repo is broken" from "this machine has leftovers",

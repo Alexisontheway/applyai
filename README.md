@@ -71,10 +71,16 @@ The commands are the same. Two things worth knowing:
   `package.json` change. A skipped script is a warning, not a failure — and for
   the Postgres binaries it is harmless either way, because the Windows package
   ships its real `initdb.exe`/`pg_ctl.exe` (its `pg-symlinks.json` is empty).
-- **Do not keep the checkout in a OneDrive/cloud-synced folder.** Sync tools can
-  remove files from under a dev server, which shows up as
-  `Failed to load url /src/main.tsx ... Does the file exist?`. Clone to something
-  like `C:\dev\applyai` instead (see Troubleshooting).
+- **If something is wrong and you cannot tell what, run `npm run doctor`.** It
+  checks the runtime, the checkout location, every file the app needs (reading
+  them, not just listing them), the install-script approvals, `.env`, the
+  database and the ports, then prints one line per finding with the command that
+  fixes it. It exits non-zero when `npm run dev` would fail.
+- **Avoid cloud-synced or junctioned checkout paths** (OneDrive, Dropbox,
+  Google Drive, or a `D:\Projects` folder that is really a junction to
+  somewhere else). Sync clients remove files from under a running dev server,
+  which surfaces as `Failed to load url /src/main.tsx ... Does the file exist?`.
+  Clone to something plain like `C:\dev\applyai` (see Troubleshooting).
 
 | Command | What it does |
 |---|---|
@@ -83,6 +89,7 @@ The commands are the same. Two things worth knowing:
 | `npm run db:local` / `db:local:stop` / `db:local:status` | Manage the embedded Postgres |
 | `npm run db:push` / `db:generate` / `db:seed` / `db:studio` | Schema + demo data |
 | `npm run db:reset` | Drop the schema, push it again and re-seed — the fix for a half-migrated database |
+| `npm run doctor` | Diagnose a checkout that will not start, and print the fix for each problem |
 | `npm run check` | Typecheck + lint + all tests |
 | `npm test` | Vitest for shared/API/web (`npm run test:ml` for the Python service) |
 | `npm run smoke` | Walks the live API end to end with a real session; exits non-zero on failure |
@@ -233,7 +240,7 @@ in a response shape fails the build instead of the browser.
 | `Database is not reachable` in the API log | `npm run db:local` (or point `DATABASE_URL` somewhere real), then `npm run db:push` |
 | `Port 5433 is already serving a Postgres database that this repo did not create` | Something else holds the port (often an older ApplyAI). `npm run setup -- --port 5434` for a separate database, or `npm run db:reset -- --yes` if that database is yours and disposable |
 | `drizzle-kit push` dies with `TypeError: Cannot read properties of undefined (reading 'columns')`, then the seed fails with `42703 column "file_name" of relation "resumes" does not exist` | You pushed this schema onto a database from an older version of ApplyAI and the push aborted half-way. `npm run db:reset` rebuilds it from scratch (add `--yes` if the database on the port is not this repo's cluster) |
-| Vite: `Pre-transform error: Failed to load url /src/main.tsx ... Does the file exist?` even though the file is in the repo | The working tree lost the file — reproduced exactly by deleting it. Restore it with `git checkout -- apps/web/src/main.tsx`; if it disappears again, the checkout is inside a cloud-synced folder (OneDrive, Dropbox, iCloud) — move it somewhere local |
+| Vite: `Pre-transform error: Failed to load url /src/main.tsx ... Does the file exist?` | `npm run doctor` names the exact cause: `git restore apps/web/src/main.tsx` if the file is missing, or a warning that the checkout sits behind a junction/cloud-synced folder if something on the machine keeps removing or locking it |
 | `npm warn install-scripts ... blocked because they are not covered by allowScripts` (npm 12+) | Review, then `npm install-scripts approve <pkg> --no-allow-scripts-pin` and `npm rebuild <pkg>`. See “On Windows” above |
 | Sign-in returns `Invalid origin` | Add the origin you are browsing from to `TRUSTED_ORIGINS` in `apps/api/.env` |
 | Job Scout finds 0 jobs | The public APIs are unreachable from your network, or every requested board 404s — the UI lists each provider's error |

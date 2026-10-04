@@ -25,6 +25,7 @@ import {
   isReachable,
   listPublicTables,
   localConnectionString,
+  npmInvocation,
   portTakenMessage,
   resolveLocalDbConfig,
   runningClusterPort,
@@ -102,24 +103,26 @@ async function waitFor(check: () => Promise<boolean>, timeoutMs: number): Promis
   return false;
 }
 
-function run(command: string, commandArgs: string[], env: NodeJS.ProcessEnv): boolean {
-  const result = spawnSync(command, commandArgs, {
+function runNpm(npmArgs: string[], env: NodeJS.ProcessEnv): boolean {
+  const invocation = npmInvocation(npmArgs);
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: REPO_ROOT,
     stdio: 'inherit',
     env,
-    shell: process.platform === 'win32',
+    shell: invocation.shell,
   });
   return result.status === 0;
 }
 
 /** Keep the local database alive after setup exits. */
 function spawnDetachedDatabase(port: number): void {
-  const child = spawn('npm', ['run', 'db:local'], {
+  const invocation = npmInvocation(['run', 'db:local']);
+  const child = spawn(invocation.command, invocation.args, {
     cwd: REPO_ROOT,
     detached: true,
     stdio: 'ignore',
     env: { ...process.env, LOCAL_DB_PORT: String(port) },
-    shell: process.platform === 'win32',
+    shell: invocation.shell,
   });
   child.unref();
 }
@@ -170,7 +173,8 @@ async function main(): Promise<void> {
       const ready = await waitFor(() => isReachable(target, 2_000), 90_000);
       if (!ready) {
         console.error(
-          '\n✗ The local database did not start in time. Run `npm run db:local` to see why.',
+          '\n✗ The local database did not start in time. Run `npm run db:local` to see why,\n' +
+            '  or `npm run doctor` for a full report.',
         );
         process.exit(1);
       }
@@ -186,18 +190,19 @@ async function main(): Promise<void> {
   }
 
   step('Creating the database schema (drizzle-kit push)');
-  const pushed = run('npm', ['run', 'db:push', '-w', 'apps/api'], childEnv);
+  const pushed = runNpm(['run', 'db:push', '-w', 'apps/api'], childEnv);
   if (!pushed) {
     console.error(
       '\n✗ Schema push failed. Check DATABASE_URL in apps/api/.env.\n' +
-        '  If the database is in a half-migrated state, `npm run db:reset` rebuilds it from scratch.',
+        '  If the database is in a half-migrated state, `npm run db:reset` rebuilds it from scratch.\n' +
+        '  `npm run doctor` reports the state of the database and the rest of the setup.',
     );
     process.exit(1);
   }
 
   if (!flags.has('--no-seed')) {
     step('Seeding a demo account');
-    const seeded = run('npm', ['run', 'db:seed'], childEnv);
+    const seeded = runNpm(['run', 'db:seed'], childEnv);
     if (!seeded) {
       console.error(
         '\n✗ Seeding the demo account failed. Retry with `npm run db:seed`.\n' +

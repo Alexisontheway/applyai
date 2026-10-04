@@ -50,6 +50,30 @@ export const MANAGED_TABLES = [
 
 export const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1', '[::1]'];
 
+/**
+ * How to run another npm script from inside an npm script.
+ *
+ * npm puts the path of its own CLI in `npm_execpath`, so it can be re-entered
+ * with the same Node binary. That matters on Windows, where spawning `npm`
+ * requires a shell: passing an argument array with `shell: true` triggers
+ * DEP0190 (and quoting problems with spaces in paths).
+ */
+export function npmInvocation(args: string[]): {
+  command: string;
+  args: string[];
+  shell: boolean;
+} {
+  const execPath = process.env.npm_execpath;
+  if (execPath && /\.(c?js)$/i.test(execPath)) {
+    return { command: process.execPath, args: [execPath, ...args], shell: false };
+  }
+  // Fallback when not started through npm: `npm.cmd` needs a shell on Windows,
+  // so hand the whole line over as one string rather than as argv.
+  return process.platform === 'win32'
+    ? { command: `npm ${args.join(' ')}`, args: [], shell: true }
+    : { command: 'npm', args, shell: false };
+}
+
 export function localConnectionString(config: LocalDbConfig = DEFAULT_LOCAL_DB): string {
   return `postgresql://${config.user}:${config.password}@localhost:${config.port}/${config.database}`;
 }
