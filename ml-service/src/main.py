@@ -1,81 +1,119 @@
+"""
+ApplyAI ML service — the optional Python half of the product.
+
+Scope is deliberately narrow. Everything that can be done well in Node lives in
+the API (matching engine, skill extraction, job discovery). This service does
+the two things Node is bad at:
+
+  1. Sentence embeddings  — semantic similarity that understands synonyms.
+  2. Document parsing     — PDF / DOCX → clean text.
+
+Both are optional. If torch is not installed, `/match` reports that embeddings
+are unavailable and the API simply redistributes that signal's weight. If the
+service is not running at all, the API still works end to end.
+"""
+
+from __future__ import annotations
+
+import logging
 import os
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from typing import Optional
-from scraper import scrape_job_listings, scrape_career_page
-from matcher import compute_match
 
-app = FastAPI(title="ApplyAI ML Service")
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
-_allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:4000").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[o.strip() for o in _allowed_origins],
-    allow_methods=["POST", "GET"],
-    allow_headers=["Content-Type"],
+from src.embeddings import embedder_status, semantic_similarity
+from src.parsing import ParseError, parse_document
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+logger = logging.getLogger("applyai.ml")
+
+app = FastAPI(
+    title="ApplyAI ML service",
+    version="0.2.0",
+    description="Embeddings and document parsing for ApplyAI. Optional — the API degrades gracefully.",
 )
 
+allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:4000").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
-class ScrapeRequest(BaseModel):
-    keywords: str
-    location: str
-    max_results: Optional[int] = 25
-
-
-class ScrapeSingleRequest(BaseModel):
-    url: str
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))
 
 
 class MatchRequest(BaseModel):
-    resume_text: str
-    jd_text: str
+    resume_text: str = Field(min_length=1, max_length=60_000)
+    jd_text: str = Field(min_length=1, max_length=60_000)
+
+
+class MatchResponse(BaseModel):
+    semantic_score: Optional[float]
+    model: Optional[str]
+    available: bool
+    note: Optional[str] = None
 
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "service": "ml-service"}
+async def health() -> dict:
+    status = embedder_status()
+    return {
+        "status": "ok",
+        "service": "ml-service",
+        "version": app.version,
+        "model": status.model,
+        "embeddings_available": status.available,
+        "note": status.note,
+        "endpoints": ["/match", "/parse-resume", "/health"],
+    }
 
 
-@app.post("/scrape-job")
-async def scrape_job(req: ScrapeRequest):
-    """Scrape jobs from multiple sources (LinkedIn, Indeed, Naukri) based on keywords and location."""
-    jobs = scrape_job_listings(req.keywords, req.location, req.max_results)
-    return {"success": True, "data": jobs, "count": len(jobs)}
+@app.post("/match", response_model=MatchResponse)
+async def match(request: MatchRequest) -> MatchResponse:
+    """Raw cosine similarity between resume and job description embeddings.
+
+    The API owns the scoring blend and calibrates this number, so this endpoint
+    returns the raw embedding similarity and nothing else.
+    """
+    result = semantic_similarity(request.resume_text, request.jd_text)
+    return MatchResponse(
+        semantic_score=result.score,
+        model=result.model,
+        available=result.available,
+        note=result.note,
+    )
 
 
-@app.post("/scrape-career-page")
-async def scrape_career(req: ScrapeSingleRequest):
-    """Scrape a single company career page for job listings."""
-    job = scrape_career_page(req.url)
-    if job:
-        return {"success": True, "data": job}
-    return {"success": False, "error": "No jobs found on this page"}
+@app.post("/parse-resume")
+async def parse_resume(file: UploadFile = File(...)) -> dict:
+    """Extract plain text from a PDF / DOCX / TXT resume."""
+    payload = await file.read()
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File is larger than the 8MB limit.")
 
+    try:
+        parsed = parse_document(file.filename or "resume", payload)
+    except ParseError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
-@app.post("/match")
-async def match_resume_jd(req: MatchRequest):
-    """Match a resume against a job description using sentence transformers."""
-    score, explanation = compute_match(req.resume_text, req.jd_text)
-    return {"match_score": score, "explanation": explanation}
+    if len(parsed.text.strip()) < 40:
+        raise HTTPException(
+            status_code=422,
+            detail="No readable text found — the file may be a scanned image or an unsupported format.",
+        )
 
-
-@app.post("/extract-skills")
-async def extract_skills(req: MatchRequest):
-    """Extract skills from a job description text."""
-    score, explanation = compute_match(req.resume_text, req.jd_text)
-    return {"skills": [], "match_score": score, "explanation": explanation}
-
-
-@app.post("/gap-analysis")
-async def gap_analysis(req: MatchRequest):
-    """Compare resume skills against JD requirements."""
-    score, explanation = compute_match(req.resume_text, req.jd_text)
-    return {"missing": [], "strong": [], "match_score": score, "explanation": explanation}
-
-
-@app.post("/cover-letter")
-async def cover_letter(req: MatchRequest):
-    """Generate a tailored cover letter using local LLM (Ollama)."""
-    score, explanation = compute_match(req.resume_text, req.jd_text)
-    return {"cover_letter": "", "match_score": score, "explanation": "Phase 4 — Ollama integration pending"}
+    # NB: logging's LogRecord already owns `filename`, so extras are prefixed.
+    logger.info(
+        "parsed resume",
+        extra={"upload_name": file.filename, "char_count": len(parsed.text), "engine": parsed.engine},
+    )
+    return {
+        "text": parsed.text,
+        "pages": parsed.pages,
+        "engine": parsed.engine,
+        "word_count": len(parsed.text.split()),
+    }

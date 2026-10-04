@@ -1,127 +1,62 @@
-import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
 import { createApplicationSchema, updateApplicationSchema } from '@applyai/shared/schemas';
-import { db } from '../db';
-import { applications, jobs, resumes } from '../db/schema';
-import { requireAuth } from '../middleware/auth';
-import { eq, and } from 'drizzle-orm';
+import { Hono } from 'hono';
+import { z } from 'zod';
+import { ok } from '../lib/errors';
+import { validate } from '../lib/validate';
+import {
+  createApplication,
+  deleteApplication,
+  getApplicationDetail,
+  listApplications,
+  scoreApplication,
+  updateApplication,
+} from '../services/application-service';
 
 export const applicationRoutes = new Hono();
 
-applicationRoutes.use('*', requireAuth);
+const listQuerySchema = z.object({
+  status: z.string().max(20).optional(),
+  q: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(500),
+});
 
-async function computeMatchScore(resumeText: string, jdText: string): Promise<number | null> {
-  if (!resumeText || !jdText) return null;
-  const mlBaseUrl = process.env.ML_SERVICE_URL || 'http://localhost:5000';
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const res = await fetch(`${mlBaseUrl}/match`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resume_text: resumeText, jd_text: jdText }),
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { match_score?: number | null };
-    return data.match_score ?? null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-applicationRoutes.get('/', async (c) => {
+applicationRoutes.get('/', validate('query', listQuerySchema), async (c) => {
   const user = c.get('user');
-  const result = await db
-    .select()
-    .from(applications)
-    .where(eq(applications.userId, user.id))
-    .leftJoin(jobs, eq(applications.jobId, jobs.id));
-  return c.json({ success: true, data: result });
+  const query = c.req.valid('query');
+  return ok(c, await listApplications(user.id, query));
 });
 
 applicationRoutes.get('/:id', async (c) => {
   const user = c.get('user');
-  const result = await db
-    .select()
-    .from(applications)
-    .where(and(eq(applications.id, c.req.param('id')), eq(applications.userId, user.id)));
-  const app = result[0];
-  if (!app) return c.json({ success: false, error: 'Not found' }, 404);
-  return c.json({ success: true, data: app });
+  return ok(c, await getApplicationDetail(user.id, c.req.param('id')));
 });
 
-applicationRoutes.post('/', zValidator('json', createApplicationSchema), async (c) => {
+applicationRoutes.post('/', validate('json', createApplicationSchema), async (c) => {
+  const user = c.get('user');
+  const application = await createApplication(user.id, c.req.valid('json'));
+  return ok(c, application, 201);
+});
+
+applicationRoutes.patch('/:id', validate('json', updateApplicationSchema), async (c) => {
+  const user = c.get('user');
+  const application = await updateApplication(user.id, c.req.param('id'), c.req.valid('json'));
+  return ok(c, application);
+});
+
+const scoreBodySchema = z.object({ resumeId: z.string().nullish() });
+
+/** Re-run the matcher against the current resume (or a specific one). */
+applicationRoutes.post('/:id/score', validate('json', scoreBodySchema), async (c) => {
   const user = c.get('user');
   const body = c.req.valid('json');
-  const id = crypto.randomUUID();
-
-  let matchScore = body.matchScore ?? null;
-
-  if (matchScore === null) {
-    const job = await db.select().from(jobs).where(eq(jobs.id, body.jobId));
-    if (job[0]) {
-      const resume = body.resumeId
-        ? await db.select().from(resumes).where(eq(resumes.id, body.resumeId))
-        : null;
-      const resumeText = resume?.[0]?.parsedText || null;
-      const jdText = job[0].description || null;
-      if (resumeText && jdText) {
-        matchScore = await computeMatchScore(resumeText, jdText);
-      }
-    }
-  }
-
-  await db.insert(applications).values({
-    id,
-    userId: user.id,
-    jobId: body.jobId,
-    status: body.status,
-    resumeId: body.resumeId,
-    matchScore: matchScore !== null ? matchScore.toString() : null,
-    notes: body.notes,
-    followUpDate: body.followUpDate,
+  const match = await scoreApplication(user.id, c.req.param('id'), {
+    resumeId: body.resumeId ?? null,
   });
-
-  const created = await db.select().from(applications).where(eq(applications.id, id));
-  return c.json({ success: true, data: created[0] }, 201);
-});
-
-applicationRoutes.patch('/:id', zValidator('json', updateApplicationSchema), async (c) => {
-  const user = c.get('user');
-  const body = c.req.valid('json');
-
-  const existing = await db
-    .select()
-    .from(applications)
-    .where(and(eq(applications.id, c.req.param('id')), eq(applications.userId, user.id)));
-  if (!existing[0]) return c.json({ success: false, error: 'Not found' }, 404);
-
-  const updateData: Record<string, unknown> = {};
-  if (body.status !== undefined) updateData.status = body.status;
-  if (body.notes !== undefined) updateData.notes = body.notes ?? null;
-  if (body.followUpDate !== undefined) updateData.followUpDate = body.followUpDate ?? null;
-  if (body.resumeId !== undefined) updateData.resumeId = body.resumeId ?? null;
-  if (body.matchScore !== undefined) updateData.matchScore = body.matchScore !== null ? body.matchScore.toString() : null;
-  updateData.updatedAt = new Date();
-
-  await db.update(applications).set(updateData).where(eq(applications.id, c.req.param('id')));
-  const updated = await db.select().from(applications).where(eq(applications.id, c.req.param('id')));
-  return c.json({ success: true, data: updated[0] });
+  return ok(c, match);
 });
 
 applicationRoutes.delete('/:id', async (c) => {
   const user = c.get('user');
-  const appId = c.req.param('id');
-
-  const existing = await db
-    .select()
-    .from(applications)
-    .where(and(eq(applications.id, appId), eq(applications.userId, user.id)));
-  if (!existing[0]) return c.json({ success: false, error: 'Not found' }, 404);
-
-  await db.delete(applications).where(and(eq(applications.id, appId), eq(applications.userId, user.id)));
-  return c.json({ success: true });
+  await deleteApplication(user.id, c.req.param('id'));
+  return ok(c, { deleted: true });
 });

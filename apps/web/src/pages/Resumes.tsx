@@ -1,163 +1,493 @@
-import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { FileText, Plus, Star, Trash2, X } from 'lucide-react';
-import { api } from '../lib/api';
-
-interface Resume {
-  id: string;
-  label: string;
-  isActive: boolean;
-  fileUrl: string | null;
-  parsedText: string | null;
-  createdAt: string;
-}
+import { useToast } from '@/components/ui/Toast';
+import {
+  Badge,
+  Banner,
+  Button,
+  Chip,
+  EmptyState,
+  Field,
+  Input,
+  SectionLabel,
+  Segmented,
+  Skeleton,
+  SkeletonList,
+  Textarea,
+} from '@/components/ui/primitives';
+import { formatRelative } from '@/lib/format';
+import {
+  useActivateResume,
+  useCoverLetters,
+  useCreateResume,
+  useDeleteResume,
+  useImportResume,
+  useResumes,
+  useUpdateResume,
+} from '@/lib/queries';
+import { cn } from '@/lib/utils';
+import { skillLabel } from '@applyai/shared/skills';
+import type { Resume } from '@applyai/shared/types';
+import { Copy, FileText, Star, Trash2, Upload, Wand2 } from 'lucide-react';
+import { useRef, useState } from 'react';
 
 export default function ResumesPage() {
-  const queryClient = useQueryClient();
+  const toast = useToast();
+  const { data: resumes, isLoading } = useResumes();
+  const createResume = useCreateResume();
+  const importResume = useImportResume();
+  const updateResume = useUpdateResume();
+  const activateResume = useActivateResume();
+  const deleteResume = useDeleteResume();
+
   const [showForm, setShowForm] = useState(false);
+  const [mode, setMode] = useState<'paste' | 'upload'>('paste');
   const [label, setLabel] = useState('');
-  const [isActive, setIsActive] = useState(false);
-  const [formError, setFormError] = useState('');
+  const [text, setText] = useState('');
+  const [makeActive, setMakeActive] = useState(true);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const { data: resumes, isLoading } = useQuery({
-    queryKey: ['resumes'],
-    queryFn: () => api.get<Resume[]>('/resumes'),
-  });
+  const resetForm = () => {
+    setLabel('');
+    setText('');
+    setMakeActive(true);
+    setFormError(null);
+    setShowForm(false);
+    if (fileRef.current) fileRef.current.value = '';
+  };
 
-  const createMutation = useMutation({
-    mutationFn: () => api.post('/resumes', { label: label.trim(), isActive }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['resumes'] });
-      setLabel('');
-      setIsActive(false);
-      setShowForm(false);
-      setFormError('');
-    },
-    onError: (err: Error) => setFormError(err.message),
-  });
+  const handleCreate = async () => {
+    setFormError(null);
+    try {
+      await createResume.mutateAsync({
+        label: label.trim(),
+        text: text.trim() || undefined,
+        isActive: makeActive,
+      });
+      toast.success('Resume added', 'Applications you track from now on can be scored against it.');
+      resetForm();
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Could not save that resume');
+    }
+  };
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/resumes/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['resumes'] }),
-  });
+  const handleUpload = async () => {
+    const file = fileRef.current?.files?.[0];
+    if (!file) {
+      setFormError('Choose a PDF, DOCX or TXT file first.');
+      return;
+    }
+    setFormError(null);
+    const formData = new FormData();
+    formData.append('file', file);
+    if (label.trim()) formData.append('label', label.trim());
+    formData.append('isActive', String(makeActive));
+    try {
+      const resume = await importResume.mutateAsync(formData);
+      toast.success('Resume imported', `${resume.wordCount} words parsed — matching is ready.`);
+      resetForm();
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Could not import that file');
+    }
+  };
 
-  const resumeList = resumes ?? [];
+  const activeResume = resumes?.find((resume) => resume.isActive);
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-8">
+    <div className="space-y-7">
+      <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Resumes</h1>
-          <p className="text-gray-500 text-sm mt-1">Manage your resume versions and track which one gets you interviews</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-white">Resumes</h1>
+          <p className="mt-1 text-sm text-zinc-500">
+            The match engine reads these. Paste the text or upload a PDF — the skills list is
+            extracted automatically.
+          </p>
         </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 bg-neon text-dark-900 px-4 py-2 text-sm font-semibold hover:bg-neon/90 transition-colors"
+        <Button
+          variant="primary"
+          icon={<Upload size={15} />}
+          onClick={() => setShowForm((value) => !value)}
         >
-          <Plus size={16} />
-          Add Resume
-        </button>
-      </div>
+          Add resume
+        </Button>
+      </header>
 
-      {/* Add form */}
-      {showForm && (
-        <div className="border border-neon/20 bg-dark-800/50 p-6 mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-white font-semibold text-sm">New Resume Version</h2>
-            <button onClick={() => { setShowForm(false); setFormError(''); }} className="text-gray-500 hover:text-white">
-              <X size={16} />
-            </button>
-          </div>
-          <div className="flex gap-4 mb-4">
-            <input
+      {!activeResume && resumes && resumes.length > 0 ? (
+        <Banner tone="warning" title="No active resume">
+          Mark one resume as active — new applications are scored against it by default.
+        </Banner>
+      ) : null}
+
+      {showForm ? (
+        <div className="border border-white/10 bg-dark-800/50 p-5 space-y-4">
+          <Segmented
+            value={mode}
+            onChange={(value) => {
+              setMode(value);
+              setFormError(null);
+            }}
+            options={[
+              { value: 'paste', label: 'Paste text' },
+              { value: 'upload', label: 'Upload file' },
+            ]}
+          />
+
+          <Field
+            label="Label"
+            hint="Name it by the jobs it targets — “SWE general”, “ML focus”, “Platform”."
+          >
+            <Input
               value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. SWE General, ML Focus, Startup"
-              className="flex-1 bg-dark-900 border border-neon/10 text-white px-4 py-2 text-sm focus:border-neon/50 focus:outline-none"
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder="e.g. Full-stack — React / Node"
             />
-            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isActive}
-                onChange={(e) => setIsActive(e.target.checked)}
-                className="accent-neon"
-              />
-              Set as active
-            </label>
-          </div>
-          {formError && <p className="text-red-400 text-xs mb-3">{formError}</p>}
-          <div className="flex gap-3">
-            <button
-              onClick={() => createMutation.mutate()}
-              disabled={!label.trim() || createMutation.isPending}
-              className="bg-neon text-dark-900 px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            >
-              {createMutation.isPending ? 'Saving...' : 'Save'}
-            </button>
-            <button onClick={() => { setShowForm(false); setFormError(''); }} className="text-gray-400 px-4 py-2 text-sm hover:text-white">
-              Cancel
-            </button>
-          </div>
-          <p className="text-gray-600 text-xs mt-3">
-            Note: File upload (PDF parsing) is coming in Phase 3. For now, label your versions to track which resume you used for each application.
-          </p>
-        </div>
-      )}
+          </Field>
 
-      {/* Resume list */}
+          {mode === 'paste' ? (
+            <Field
+              label="Resume text"
+              hint="Plain text works best. Include your skills section — that is what gets matched."
+            >
+              <Textarea
+                rows={12}
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                placeholder={
+                  'Paste your full resume here…\n\nSUMMARY\n…\n\nSKILLS\nTypeScript, React, PostgreSQL…'
+                }
+              />
+            </Field>
+          ) : (
+            <Field
+              label="File"
+              hint="PDF and DOCX need the optional ML service (npm run dev:ml). TXT always works."
+            >
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".pdf,.docx,.txt,.md,.rst"
+                className="w-full border border-white/10 bg-dark-900/80 px-3 py-2 text-sm text-zinc-400 file:mr-3 file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-xs file:text-white"
+              />
+            </Field>
+          )}
+
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-400">
+            <input
+              type="checkbox"
+              checked={makeActive}
+              onChange={(event) => setMakeActive(event.target.checked)}
+              className="accent-neon"
+            />
+            Make this the active resume
+          </label>
+
+          {formError ? <Banner tone="error">{formError}</Banner> : null}
+
+          <div className="flex gap-2">
+            <Button
+              variant="primary"
+              icon={<Wand2 size={14} />}
+              loading={createResume.isPending || importResume.isPending}
+              onClick={mode === 'paste' ? handleCreate : handleUpload}
+              disabled={mode === 'paste' ? text.trim().length < 40 || !label.trim() : false}
+            >
+              {mode === 'paste' ? 'Save resume' : 'Import file'}
+            </Button>
+            <Button variant="ghost" onClick={resetForm}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {isLoading ? (
-        <div className="border border-neon/10 bg-dark-800/30 p-8 text-center">
-          <p className="text-gray-500 text-sm">Loading resumes...</p>
-        </div>
-      ) : resumeList.length === 0 ? (
-        <div className="border border-neon/10 bg-dark-800/30 p-16 text-center">
-          <FileText size={40} className="mx-auto text-gray-600 mb-4" />
-          <p className="text-gray-500">
-            No resumes added yet. Click <span className="text-neon">Add Resume</span> to create your first version.
-          </p>
-          <p className="text-gray-600 text-sm mt-2">Phase 3 will add PDF upload and ML-powered skill extraction.</p>
-        </div>
+        <SkeletonList count={3} className="h-32" />
+      ) : (resumes ?? []).length === 0 ? (
+        <EmptyState
+          icon={<FileText size={22} />}
+          title="No resumes yet"
+          description="Add one resume to unlock match scores, gap analysis and grounded cover letters. Everything else in ApplyAI builds on this."
+          action={
+            <Button variant="primary" onClick={() => setShowForm(true)}>
+              Add your first resume
+            </Button>
+          }
+        />
       ) : (
         <div className="space-y-3">
-          {resumeList.map((resume) => (
-            <div
+          {(resumes ?? []).map((resume) => (
+            <ResumeCard
               key={resume.id}
-              className={`border p-5 flex items-center justify-between gap-4 transition-colors ${
-                resume.isActive
-                  ? 'border-neon/40 bg-neon/5'
-                  : 'border-neon/10 bg-dark-800/30 hover:border-neon/20'
-              }`}
-            >
-              <div className="flex items-center gap-4 min-w-0">
-                <FileText size={20} className={resume.isActive ? 'text-neon shrink-0' : 'text-gray-500 shrink-0'} />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-white font-medium text-sm truncate">{resume.label}</p>
-                    {resume.isActive && (
-                      <span className="flex items-center gap-1 text-neon text-xs font-mono bg-neon/10 px-2 py-0.5 shrink-0">
-                        <Star size={10} fill="currentColor" />
-                        Active
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-gray-500 text-xs mt-0.5">
-                    Added {new Date(resume.createdAt).toLocaleDateString()}
-                    {resume.parsedText ? ' · Text extracted' : ' · No file uploaded'}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => deleteMutation.mutate(resume.id)}
-                disabled={deleteMutation.isPending}
-                className="shrink-0 text-gray-600 hover:text-red-400 transition-colors p-1 disabled:opacity-50"
-                title="Delete resume"
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
+              resume={resume}
+              expanded={expandedId === resume.id}
+              onToggleExpand={() => setExpandedId(expandedId === resume.id ? null : resume.id)}
+              renaming={renamingId === resume.id}
+              renameValue={renameValue}
+              onRenameChange={setRenameValue}
+              onRenameStart={() => {
+                setRenamingId(resume.id);
+                setRenameValue(resume.label);
+              }}
+              onRenameSave={() => {
+                updateResume.mutate(
+                  { id: resume.id, patch: { label: renameValue.trim() } },
+                  { onSuccess: () => toast.success('Renamed') },
+                );
+                setRenamingId(null);
+              }}
+              onActivate={() =>
+                activateResume.mutate(resume.id, {
+                  onSuccess: () => toast.success(`“${resume.label}” is now the active resume`),
+                })
+              }
+              confirmingDelete={confirmDeleteId === resume.id}
+              onDeleteConfirm={() => setConfirmDeleteId(resume.id)}
+              onDeleteCancel={() => setConfirmDeleteId(null)}
+              onDelete={() =>
+                deleteResume.mutate(resume.id, {
+                  onSuccess: () => {
+                    toast.success('Resume deleted');
+                    setConfirmDeleteId(null);
+                  },
+                })
+              }
+            />
           ))}
         </div>
       )}
+
+      <LettersSection />
     </div>
+  );
+}
+
+function ResumeCard({
+  resume,
+  expanded,
+  onToggleExpand,
+  renaming,
+  renameValue,
+  onRenameChange,
+  onRenameStart,
+  onRenameSave,
+  onActivate,
+  confirmingDelete,
+  onDeleteConfirm,
+  onDeleteCancel,
+  onDelete,
+}: {
+  resume: Resume;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  renaming: boolean;
+  renameValue: string;
+  onRenameChange: (value: string) => void;
+  onRenameStart: () => void;
+  onRenameSave: () => void;
+  onActivate: () => void;
+  confirmingDelete: boolean;
+  onDeleteConfirm: () => void;
+  onDeleteCancel: () => void;
+  onDelete: () => void;
+}) {
+  const summary = resume.summary;
+  const skills = resume.skills.slice(0, 16);
+
+  return (
+    <div
+      className={cn(
+        'border bg-dark-800/30 transition-colors',
+        resume.isActive ? 'border-neon/40 bg-neon/[0.03]' : 'border-white/8 hover:border-white/20',
+      )}
+    >
+      <div className="flex items-start justify-between gap-4 p-5">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            {renaming ? (
+              <span className="flex items-center gap-2">
+                <Input
+                  value={renameValue}
+                  onChange={(event) => onRenameChange(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Enter' && onRenameSave()}
+                  className="h-8 w-72"
+                  autoFocus
+                />
+                <Button size="sm" variant="primary" onClick={onRenameSave}>
+                  Save
+                </Button>
+              </span>
+            ) : (
+              <>
+                <h3 className="text-sm font-medium text-white">{resume.label}</h3>
+                {resume.isActive ? (
+                  <Badge tone="neon">
+                    <Star size={10} /> Active
+                  </Badge>
+                ) : null}
+                {resume.source === 'upload' ? <Badge tone="sky">Uploaded</Badge> : null}
+              </>
+            )}
+          </div>
+
+          <p className="mt-1 text-xs text-zinc-500">
+            {resume.wordCount} words · {resume.skills.length} skills detected · added{' '}
+            {formatRelative(resume.createdAt)}
+            {summary
+              ? ` · used in ${summary.usageCount} application${summary.usageCount === 1 ? '' : 's'}`
+              : ''}
+          </p>
+
+          {skills.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-1">
+              {skills.map((skillId) => (
+                <Chip key={skillId}>{skillLabel(skillId)}</Chip>
+              ))}
+              {resume.skills.length > skills.length ? (
+                <Chip className="text-zinc-500">+{resume.skills.length - skills.length} more</Chip>
+              ) : null}
+            </div>
+          ) : (
+            <p className="mt-3 text-xs text-amber-300/80">
+              No skills were detected — add a skills section, or paste the resume text instead of a
+              file.
+            </p>
+          )}
+
+          {summary && summary.usageCount > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 border-t border-white/6 pt-3 text-xs text-zinc-400">
+              <span>
+                Interviews <span className="text-white">{summary.interviews}</span>
+              </span>
+              <span>
+                Offers <span className="text-white">{summary.offers}</span>
+              </span>
+              <span>
+                Interview rate{' '}
+                <span className="text-white">
+                  {summary.interviewRate === null ? '—' : `${summary.interviewRate}%`}
+                </span>
+              </span>
+              <span>
+                Avg score{' '}
+                <span className="text-white">
+                  {summary.avgMatchScore === null ? '—' : `${Math.round(summary.avgMatchScore)}%`}
+                </span>
+              </span>
+            </div>
+          ) : null}
+
+          {expanded && resume.parsedText ? (
+            <pre className="mt-4 max-h-72 overflow-y-auto whitespace-pre-wrap border border-white/8 bg-dark-900/70 p-3 text-[11px] leading-relaxed text-zinc-500">
+              {resume.parsedText}
+            </pre>
+          ) : null}
+        </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          {!resume.isActive ? (
+            <Button size="sm" onClick={onActivate}>
+              Set active
+            </Button>
+          ) : null}
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="ghost" onClick={onRenameStart}>
+              Rename
+            </Button>
+            {resume.parsedText ? (
+              <Button size="sm" variant="ghost" onClick={onToggleExpand}>
+                {expanded ? 'Hide text' : 'View text'}
+              </Button>
+            ) : null}
+            {confirmingDelete ? null : (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onDeleteConfirm}
+                className="hover:text-red-300"
+              >
+                <Trash2 size={13} />
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {confirmingDelete ? (
+        <div className="border-t border-red-500/20 bg-red-500/5 px-5 py-3">
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-xs text-red-300">
+              Delete “{resume.label}”? Applications keep their history but lose the resume link.
+            </p>
+            <div className="flex gap-2">
+              <Button size="sm" variant="danger" onClick={onDelete}>
+                Delete
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onDeleteCancel}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function LettersSection() {
+  const toast = useToast();
+  const { data: letters } = useCoverLetters();
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  if (!letters || letters.length === 0) return null;
+
+  return (
+    <section>
+      <SectionLabel>Cover letters ({letters.length})</SectionLabel>
+      <div className="space-y-2">
+        {letters.map((letter) => {
+          const isOpen = openId === letter.id;
+          return (
+            <div key={letter.id} className="border border-white/8 bg-dark-800/30">
+              <button
+                type="button"
+                onClick={() => setOpenId(isOpen ? null : letter.id)}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm text-white">{letter.title}</span>
+                  <span className="block text-[11px] text-zinc-500">
+                    {letter.tone} · {formatRelative(letter.createdAt)}
+                  </span>
+                </span>
+                <Badge tone={letter.engine.startsWith('ollama') ? 'neon' : 'neutral'}>
+                  {letter.engine.startsWith('ollama') ? 'LLM' : 'template'}
+                </Badge>
+              </button>
+              {isOpen ? (
+                <div className="border-t border-white/8 p-4">
+                  <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap text-[13px] leading-relaxed text-zinc-300">
+                    {letter.body}
+                  </pre>
+                  <Button
+                    size="sm"
+                    className="mt-3"
+                    icon={<Copy size={13} />}
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(letter.body);
+                      toast.success('Copied to clipboard');
+                    }}
+                  >
+                    Copy
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }

@@ -49,3 +49,9 @@ coverage/
 
 # Misc
 .puppeteerrc.cache/
+
+# Local development database (embedded-postgres cluster, never commit)
+.localdb/
+
+# Scratch directory used by one-off scripts and probes
+.tmp/

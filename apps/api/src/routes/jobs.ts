@@ -1,137 +1,199 @@
+import {
+  createJobSchema,
+  listJobsQuerySchema,
+  trackJobSchema,
+  updateJobSchema,
+} from '@applyai/shared/schemas';
+import type { Job } from '@applyai/shared/types';
+import { and, count, desc, eq, ilike, or } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
-import { createJobSchema, updateJobSchema, scrapeJobsSchema } from '@applyai/shared/schemas';
 import { db } from '../db';
-import { jobs } from '../db/schema';
-import { requireAuth } from '../middleware/auth';
-import { eq, and } from 'drizzle-orm';
+import { applications, jobs } from '../db/schema';
+import { AppError, ok } from '../lib/errors';
+import { toJob } from '../lib/serializers';
+import { validate } from '../lib/validate';
+import { extractSkillHits } from '../match/skills';
+import { shortId } from '../match/text';
+import { ensureCompany, trackJob } from '../services/application-service';
 
 export const jobRoutes = new Hono();
 
-jobRoutes.use('*', requireAuth);
-
-jobRoutes.get('/', async (c) => {
+jobRoutes.get('/', validate('query', listJobsQuerySchema), async (c) => {
   const user = c.get('user');
-  const result = await db.select().from(jobs).where(eq(jobs.userId, user.id));
-  return c.json({ success: true, data: result });
+  const query = c.req.valid('query');
+
+  const filters = [eq(jobs.userId, user.id)];
+  if (query.q) {
+    const term = `%${query.q}%`;
+    const search = or(
+      ilike(jobs.title, term),
+      ilike(jobs.company, term),
+      ilike(jobs.location, term),
+    );
+    if (search) filters.push(search);
+  }
+  if (query.source) filters.push(eq(jobs.source, query.source));
+  const where = and(...filters);
+
+  const [rows, totals] = await Promise.all([
+    db
+      .select({
+        job: jobs,
+        applicationId: applications.id,
+        status: applications.status,
+        matchScore: applications.matchScore,
+      })
+      .from(jobs)
+      .leftJoin(applications, eq(applications.jobId, jobs.id))
+      .where(where)
+      .orderBy(desc(jobs.createdAt))
+      .limit(query.limit)
+      .offset(query.offset),
+    db.select({ value: count() }).from(jobs).where(where),
+  ]);
+
+  let items: Job[] = rows.map((row) => ({
+    ...toJob(row.job),
+    tracked: Boolean(row.applicationId),
+    applicationId: row.applicationId,
+    applicationStatus: row.status,
+    matchScore: row.matchScore === null ? null : Number(row.matchScore),
+  }));
+
+  if (query.tracked === 'true') items = items.filter((job) => job.tracked);
+  if (query.tracked === 'false') items = items.filter((job) => !job.tracked);
+
+  return ok(c, {
+    items,
+    total: Number(totals[0]?.value ?? 0),
+    limit: query.limit,
+    offset: query.offset,
+  });
 });
 
 jobRoutes.get('/:id', async (c) => {
   const user = c.get('user');
-  const result = await db.select().from(jobs).where(eq(jobs.id, c.req.param('id')));
-  const job = result[0];
-  if (!job || job.userId !== user.id) {
-    return c.json({ success: false, error: 'Not found' }, 404);
-  }
-  return c.json({ success: true, data: job });
+  const [row] = await db
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.id, c.req.param('id')), eq(jobs.userId, user.id)))
+    .limit(1);
+  if (!row) throw AppError.notFound('Job');
+  const [application] = await db
+    .select()
+    .from(applications)
+    .where(eq(applications.jobId, row.id))
+    .limit(1);
+  return ok(c, {
+    ...toJob(row),
+    tracked: Boolean(application),
+    applicationId: application?.id ?? null,
+    applicationStatus: application?.status ?? null,
+  });
 });
 
-jobRoutes.post('/', zValidator('json', createJobSchema), async (c) => {
+/** Create a job without tracking it yet. Idempotent per (user, url). */
+jobRoutes.post('/', validate('json', createJobSchema), async (c) => {
   const user = c.get('user');
   const body = c.req.valid('json');
-  const id = crypto.randomUUID();
 
+  if (body.url) {
+    const [existing] = await db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.userId, user.id), eq(jobs.url, body.url)))
+      .limit(1);
+    if (existing) return ok(c, toJob(existing));
+  }
+
+  const companyId = await ensureCompany(user.id, body.company, {
+    techStack: body.techStack ?? null,
+  });
+  const techStack = body.techStack?.length
+    ? body.techStack
+    : body.description
+      ? extractSkillHits(body.description, { maxContexts: 0 })
+          .slice(0, 25)
+          .map((hit) => hit.label)
+      : null;
+
+  const id = shortId('job');
   await db.insert(jobs).values({
     id,
     userId: user.id,
-    ...body,
-    techStack: body.techStack ?? null,
+    companyId,
+    title: body.title,
+    company: body.company,
+    location: body.location ?? null,
+    url: body.url ?? null,
+    source: body.source,
+    salaryMin: body.salaryMin ?? null,
+    salaryMax: body.salaryMax ?? null,
+    description: body.description ?? null,
+    techStack,
+    postedAt: body.postedAt ? new Date(body.postedAt) : null,
   });
 
-  const created = await db.select().from(jobs).where(eq(jobs.id, id));
-  return c.json({ success: true, data: created[0] }, 201);
+  const [row] = await db.select().from(jobs).where(eq(jobs.id, id));
+  return ok(c, toJob(row), 201);
+});
+
+/**
+ * One-call "track this job": saves the job (dedup by URL), starts an
+ * application, and scores it against the active resume.
+ */
+jobRoutes.post('/track', validate('json', trackJobSchema), async (c) => {
+  const user = c.get('user');
+  const body = c.req.valid('json');
+  const result = await trackJob(user.id, body);
+  return ok(c, result, result.created ? 201 : 200);
+});
+
+jobRoutes.patch('/:id', validate('json', updateJobSchema), async (c) => {
+  const user = c.get('user');
+  const body = c.req.valid('json');
+  const id = c.req.param('id');
+
+  const [existing] = await db
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.id, id), eq(jobs.userId, user.id)))
+    .limit(1);
+  if (!existing) throw AppError.notFound('Job');
+
+  const patch: Partial<typeof jobs.$inferInsert> = { updatedAt: new Date() };
+  if (body.title !== undefined) patch.title = body.title;
+  if (body.company !== undefined) patch.company = body.company;
+  if (body.location !== undefined) patch.location = body.location ?? null;
+  if (body.url !== undefined) patch.url = body.url ?? null;
+  if (body.source !== undefined) patch.source = body.source;
+  if (body.salaryMin !== undefined) patch.salaryMin = body.salaryMin ?? null;
+  if (body.salaryMax !== undefined) patch.salaryMax = body.salaryMax ?? null;
+  if (body.description !== undefined) patch.description = body.description ?? null;
+  if (body.postedAt !== undefined) patch.postedAt = body.postedAt ? new Date(body.postedAt) : null;
+  if (body.techStack !== undefined) {
+    patch.techStack = body.techStack ?? null;
+  } else if (body.description) {
+    patch.techStack = extractSkillHits(body.description, { maxContexts: 0 })
+      .slice(0, 25)
+      .map((hit) => hit.label);
+  }
+
+  await db.update(jobs).set(patch).where(eq(jobs.id, id));
+  const [row] = await db.select().from(jobs).where(eq(jobs.id, id));
+  return ok(c, toJob(row));
 });
 
 jobRoutes.delete('/:id', async (c) => {
   const user = c.get('user');
-  const result = await db.select().from(jobs).where(eq(jobs.id, c.req.param('id')));
-  const job = result[0];
-  if (!job || job.userId !== user.id) {
-    return c.json({ success: false, error: 'Not found' }, 404);
-  }
-
-  await db.delete(jobs).where(and(eq(jobs.id, c.req.param('id')), eq(jobs.userId, user.id)));
-  return c.json({ success: true });
-});
-
-jobRoutes.patch('/:id', zValidator('json', updateJobSchema), async (c) => {
-  const user = c.get('user');
-  const body = c.req.valid('json');
-  const jobId = c.req.param('id');
-
-  const existing = await db
+  const id = c.req.param('id');
+  const [existing] = await db
     .select()
     .from(jobs)
-    .where(and(eq(jobs.id, jobId), eq(jobs.userId, user.id)));
-  if (!existing[0]) return c.json({ success: false, error: 'Not found' }, 404);
-
-  const updateData: Record<string, unknown> = {};
-  if (body.title !== undefined) updateData.title = body.title;
-  if (body.company !== undefined) updateData.company = body.company;
-  if (body.location !== undefined) updateData.location = body.location ?? null;
-  if (body.url !== undefined) updateData.url = body.url ?? null;
-  if (body.source !== undefined) updateData.source = body.source;
-  if (body.salaryMin !== undefined) updateData.salaryMin = body.salaryMin ?? null;
-  if (body.salaryMax !== undefined) updateData.salaryMax = body.salaryMax ?? null;
-  if (body.description !== undefined) updateData.description = body.description ?? null;
-  if (body.techStack !== undefined) updateData.techStack = body.techStack ?? null;
-
-  await db.update(jobs).set(updateData).where(and(eq(jobs.id, jobId), eq(jobs.userId, user.id)));
-  const updated = await db.select().from(jobs).where(eq(jobs.id, jobId));
-  return c.json({ success: true, data: updated[0] });
-});
-
-jobRoutes.post('/scrape', zValidator('json', scrapeJobsSchema), async (c) => {
-  const user = c.get('user');
-  const body = c.req.valid('json');
-  const mlBaseUrl = process.env.ML_SERVICE_URL || 'http://localhost:5000';
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30_000);
-
-  try {
-    const response = await fetch(`${mlBaseUrl}/scrape-job`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        keywords: body.keywords,
-        location: body.location || '',
-        max_results: body.maxResults,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      return c.json({ success: false, error: 'ML service scraping failed' }, 502);
-    }
-
-    const mlData = (await response.json()) as { data?: Array<Record<string, unknown>> };
-    const scrapedJobs = mlData.data || [];
-    const createdJobs = [];
-
-    for (const job of scrapedJobs) {
-      const id = crypto.randomUUID();
-      await db.insert(jobs).values({
-        id,
-        userId: user.id,
-        title: job.title as string,
-        company: job.company as string,
-        location: (job.location as string) || body.location || null,
-        url: (job.url as string) || null,
-        source: (job.source as 'scrape') || 'scrape',
-        description: null,
-        techStack: null,
-      });
-      createdJobs.push({ id, ...job });
-    }
-
-    return c.json({ success: true, data: createdJobs, count: createdJobs.length }, 201);
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      return c.json({ success: false, error: 'Scraping timed out — try fewer keywords' }, 504);
-    }
-    return c.json({ success: false, error: 'Scraping service unavailable' }, 503);
-  } finally {
-    clearTimeout(timer);
-  }
+    .where(and(eq(jobs.id, id), eq(jobs.userId, user.id)))
+    .limit(1);
+  if (!existing) throw AppError.notFound('Job');
+  // Applications cascade with the job.
+  await db.delete(jobs).where(eq(jobs.id, id));
+  return ok(c, { deleted: true });
 });

@@ -1,8 +1,9 @@
-import 'hono';
+import type { User } from '@applyai/shared/types';
 
 declare module 'hono' {
   interface ContextVariableMap {
-    user: { id: string; name: string; email: string };
+    user: User;
     session: { id: string };
+    requestId: string;
   }
 }

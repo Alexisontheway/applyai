@@ -1,153 +1,187 @@
-import { useState, useRef } from 'react';
-import { useRouter } from '@tanstack/react-router';
-import { authClient } from '../lib/auth';
+import { useToast } from '@/components/ui/Toast';
+import { Banner, Button, Field, Input } from '@/components/ui/primitives';
+import { authClient, authErrorMessage } from '@/lib/auth';
+import { useNavigate } from '@tanstack/react-router';
+import { ArrowRight } from 'lucide-react';
+import { useState } from 'react';
 
 export default function LoginPage() {
-  const router = useRouter();
-  const emailRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [mode, setMode] = useState<'signin' | 'register'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [isRegister, setIsRegister] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function extractError(err: unknown): string {
-    if (err instanceof Error) return err.message;
-    if (err && typeof err === 'object') {
-      const obj = err as Record<string, unknown>;
-      if (obj.error && typeof obj.error === 'object') {
-        const e = obj.error as Record<string, unknown>;
-        if (typeof e.message === 'string') return e.message;
-      }
-      if (typeof obj.message === 'string') return obj.message;
-    }
-    return 'Something went wrong';
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
     setIsSubmitting(true);
 
     try {
-      if (isRegister) {
-        if (!name.trim()) {
-          setError('Name is required');
-          setIsSubmitting(false);
-          return;
-        }
-        const res = await authClient.signUp.email({ email, password, name });
-        if (res.error) {
-          setError(extractError(res.error));
-          setIsSubmitting(false);
-          return;
-        }
-      } else {
-        const res = await authClient.signIn.email({ email, password });
-        if (res.error) {
-          setError(extractError(res.error));
-          setIsSubmitting(false);
-          return;
-        }
-      }
+      const result =
+        mode === 'register'
+          ? await authClient.signUp.email({ email, password, name })
+          : await authClient.signIn.email({ email, password });
 
-      const session = await authClient.getSession();
-      if (!session.data?.user) {
-        setError('Session not created. Please sign in.');
-        setIsSubmitting(false);
+      if (result.error) {
+        setError(authErrorMessage(result.error));
         return;
       }
 
-      await router.navigate({ to: '/' });
-    } catch (err) {
-      setError(extractError(err));
+      toast.success(mode === 'register' ? 'Account created' : 'Welcome back');
+      await navigate({ to: '/' });
+    } catch (submitError) {
+      setError(authErrorMessage(submitError));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const switchMode = () => {
-    setIsRegister(!isRegister);
-    setError('');
+  const fillDemo = () => {
+    setMode('signin');
+    setEmail('demo@applyai.dev');
+    setPassword('demo1234');
   };
 
   return (
-    <div className="min-h-screen bg-dark-900 flex items-center justify-center p-6">
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-10">
-          <div className="w-14 h-14 bg-neon text-dark-900 flex items-center justify-center font-bold text-xl mx-auto mb-4">
-            A
-          </div>
-          <h1 className="text-2xl font-bold text-white">ApplyAI</h1>
-          <p className="text-gray-500 text-sm mt-1">Job Search Co-Pilot</p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {isRegister && (
-            <div>
-              <label className="block text-sm text-gray-400 mb-1 font-mono">Name</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => { setName(e.target.value); setError(''); }}
-                className="w-full bg-dark-800 border border-neon/10 text-white px-4 py-2.5 text-sm focus:border-neon/50 focus:outline-none transition-colors"
-                required
-                autoFocus
-              />
+    <div className="grid min-h-screen lg:grid-cols-2">
+      {/* left: form */}
+      <div className="flex items-center justify-center px-6 py-12">
+        <div className="w-full max-w-sm">
+          <div className="mb-8">
+            <div className="mb-5 flex h-11 w-11 items-center justify-center bg-neon text-lg font-black text-black">
+              A
             </div>
-          )}
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-1 font-mono">Email</label>
-            <input
-              ref={emailRef}
-              type="email"
-              value={email}
-              onChange={(e) => { setEmail(e.target.value); setError(''); }}
-              className="w-full bg-dark-800 border border-neon/10 text-white px-4 py-2.5 text-sm focus:border-neon/50 focus:outline-none transition-colors"
-              required
-              autoFocus={!isRegister}
-            />
+            <h1 className="text-2xl font-semibold tracking-tight text-white">
+              {mode === 'signin' ? 'Sign in to ApplyAI' : 'Create your account'}
+            </h1>
+            <p className="mt-1 text-sm text-zinc-500">
+              {mode === 'signin'
+                ? 'Your pipeline, resumes and match scores.'
+                : 'One account. Your job search, measured.'}
+            </p>
           </div>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1 font-mono">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => { setPassword(e.target.value); setError(''); }}
-              className="w-full bg-dark-800 border border-neon/10 text-white px-4 py-2.5 text-sm focus:border-neon/50 focus:outline-none transition-colors"
-              required
-              minLength={8}
-            />
-          </div>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === 'register' ? (
+              <Field label="Name">
+                <Input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  required
+                  minLength={2}
+                  autoFocus
+                />
+              </Field>
+            ) : null}
 
-          {error && (
-            <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 px-3 py-2">{error}</p>
-          )}
+            <Field label="Email" htmlFor="login-email">
+              <Input
+                id="login-email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                required
+                autoComplete="email"
+                autoFocus={mode === 'signin'}
+              />
+            </Field>
 
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full bg-neon text-dark-900 font-semibold py-2.5 text-sm hover:bg-neon/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isSubmitting
-              ? (isRegister ? 'Creating account...' : 'Signing in...')
-              : (isRegister ? 'Create account' : 'Sign in')}
-          </button>
+            <Field
+              label="Password"
+              htmlFor="login-password"
+              hint={mode === 'register' ? 'At least 8 characters.' : undefined}
+            >
+              <Input
+                id="login-password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                minLength={8}
+                autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+              />
+            </Field>
 
-          <p className="text-center text-gray-500 text-sm">
-            {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
+            {error ? <Banner tone="error">{error}</Banner> : null}
+
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              className="w-full"
+              loading={isSubmitting}
+              icon={<ArrowRight size={16} />}
+            >
+              {mode === 'signin' ? 'Sign in' : 'Create account'}
+            </Button>
+          </form>
+
+          <div className="mt-6 space-y-3 text-sm">
+            <p className="text-zinc-500">
+              {mode === 'signin' ? "Don't have an account?" : 'Already have an account?'}{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setMode(mode === 'signin' ? 'register' : 'signin');
+                  setError(null);
+                }}
+                className="text-neon hover:underline"
+              >
+                {mode === 'signin' ? 'Register' : 'Sign in'}
+              </button>
+            </p>
             <button
               type="button"
-              onClick={switchMode}
-              className="text-neon hover:underline"
+              onClick={fillDemo}
+              className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
             >
-              {isRegister ? 'Sign in' : 'Register'}
+              Use the seeded demo account → demo@applyai.dev / demo1234
             </button>
-          </p>
-        </form>
+          </div>
+        </div>
+      </div>
+
+      {/* right: pitch */}
+      <div className="relative hidden border-l border-white/8 bg-dark-800/20 lg:block">
+        <div className="grid-noise absolute inset-0 opacity-60" />
+        <div className="relative flex h-full flex-col justify-center px-14">
+          <p className="label-micro mb-6">Job search co-pilot</p>
+          <h2 className="max-w-md text-3xl font-semibold leading-tight tracking-tight text-white">
+            Every application, scored against your resume. No more guessing which ones are worth it.
+          </h2>
+          <ul className="mt-8 space-y-4 text-sm text-zinc-400">
+            {[
+              [
+                'Match engine',
+                'Skill coverage, keyword overlap and semantic similarity — each result explains the gaps.',
+              ],
+              [
+                'Discovery',
+                'Search Greenhouse, Lever, Ashby, Remotive, RemoteOK and Arbeitnow from one place.',
+              ],
+              [
+                'Pipeline',
+                'Seven stages, real status history, follow-up reminders and analytics that come from the data.',
+              ],
+              [
+                'Cover letters',
+                'Grounded in your resume: a local LLM when available, a template engine when not.',
+              ],
+            ].map(([title, description]) => (
+              <li key={title} className="flex gap-3">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 bg-neon" />
+                <span>
+                  <span className="text-white">{title}</span>
+                  <span className="block text-zinc-500">{description}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
     </div>
   );

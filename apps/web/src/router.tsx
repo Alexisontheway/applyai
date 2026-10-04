@@ -1,77 +1,140 @@
+import AppShell from '@/components/AppShell';
+import { Button, Panel } from '@/components/ui/primitives';
+import { getSessionUser } from '@/lib/auth';
+import AnalyticsPage from '@/pages/Analytics';
+import ApplicationsPage from '@/pages/Applications';
+import CompaniesPage from '@/pages/Companies';
+import DashboardPage from '@/pages/Dashboard';
+import JobScoutPage from '@/pages/JobScout';
+import LoginPage from '@/pages/Login';
+import NotFoundPage from '@/pages/NotFound';
+import PipelinePage from '@/pages/Pipeline';
+import ResumesPage from '@/pages/Resumes';
+import type { User } from '@applyai/shared/types';
 import {
-  createRootRoute,
+  Outlet,
+  type RouterHistory,
+  createRootRouteWithContext,
   createRoute,
   createRouter,
   redirect,
 } from '@tanstack/react-router';
-import { authClient } from './lib/auth';
-import RootLayout from './components/RootLayout';
-import DashboardPage from './pages/Dashboard';
-import PipelinePage from './pages/Pipeline';
-import JobScoutPage from './pages/JobScout';
-import AnalyticsPage from './pages/Analytics';
-import ResumesPage from './pages/Resumes';
-import LoginPage from './pages/Login';
 
-async function requireAuth() {
-  const res = await authClient.getSession();
-  const session = 'data' in res ? res.data : null;
-  if (!session?.user) throw redirect({ to: '/login' });
-  return session;
+export interface RouterContext {
+  auth: { user: User | null };
 }
 
-const rootRoute = createRootRoute({
+function RootLayout() {
+  const { auth } = rootRoute.useRouteContext();
+  return <AppShell user={auth.user ? { name: auth.user.name, email: auth.user.email } : null} />;
+}
+
+function RouteError({ error }: { error: Error }) {
+  return (
+    <Panel className="mx-auto mt-16 max-w-lg">
+      <p className="label-micro mb-2">Unexpected error</p>
+      <h1 className="text-lg font-semibold text-white">This screen failed to render</h1>
+      <p className="mt-2 break-words text-sm text-zinc-400">{error.message}</p>
+      <Button variant="primary" className="mt-5" onClick={() => window.location.reload()}>
+        Reload the app
+      </Button>
+    </Panel>
+  );
+}
+
+const rootRoute = createRootRouteWithContext<RouterContext>()({
+  // Resolve the session once per navigation; children read it from context.
+  beforeLoad: async () => ({ auth: { user: await getSessionUser() } }),
   component: RootLayout,
+  errorComponent: RouteError,
+  notFoundComponent: NotFoundPage,
 });
 
-const indexRoute = createRoute({
+const authenticated = createRoute({
   getParentRoute: () => rootRoute,
+  id: 'authenticated',
+  beforeLoad: ({ context }) => {
+    if (!context.auth.user) throw redirect({ to: '/login' });
+  },
+  component: () => <Outlet />,
+});
+
+const dashboardRoute = createRoute({
+  getParentRoute: () => authenticated,
   path: '/',
-  beforeLoad: requireAuth,
   component: DashboardPage,
 });
-
 const pipelineRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => authenticated,
   path: '/pipeline',
-  beforeLoad: requireAuth,
   component: PipelinePage,
 });
-
-const jobScoutRoute = createRoute({
-  getParentRoute: () => rootRoute,
+const applicationsRoute = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/applications',
+  component: ApplicationsPage,
+});
+const scoutRoute = createRoute({
+  getParentRoute: () => authenticated,
   path: '/job-scout',
-  beforeLoad: requireAuth,
   component: JobScoutPage,
 });
-
-const analyticsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/analytics',
-  beforeLoad: requireAuth,
-  component: AnalyticsPage,
-});
-
 const resumesRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => authenticated,
   path: '/resumes',
-  beforeLoad: requireAuth,
   component: ResumesPage,
+});
+const companiesRoute = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/companies',
+  component: CompaniesPage,
+});
+const analyticsRoute = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/analytics',
+  component: AnalyticsPage,
 });
 
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
+  beforeLoad: ({ context }) => {
+    if (context.auth.user) throw redirect({ to: '/' });
+  },
   component: LoginPage,
 });
 
 const routeTree = rootRoute.addChildren([
-  indexRoute,
-  pipelineRoute,
-  jobScoutRoute,
-  analyticsRoute,
-  resumesRoute,
+  authenticated.addChildren([
+    dashboardRoute,
+    pipelineRoute,
+    applicationsRoute,
+    scoutRoute,
+    resumesRoute,
+    companiesRoute,
+    analyticsRoute,
+  ]),
   loginRoute,
 ]);
 
-export const router = createRouter({ routeTree });
+/**
+ * The router is created through a factory so tests can drive it with a memory
+ * history instead of the browser's. The app itself uses the browser history.
+ */
+export function createAppRouter(history?: RouterHistory) {
+  return createRouter({
+    routeTree,
+    context: { auth: { user: null } },
+    history,
+    defaultPreload: 'intent',
+    defaultPreloadStaleTime: 0,
+  });
+}
+
+export const router = createAppRouter();
+
+declare module '@tanstack/react-router' {
+  interface Register {
+    router: typeof router;
+  }
+}

@@ -1,26 +1,48 @@
 {
   "name": "applyai",
+  "version": "0.1.0",
   "private": true,
-  "workspaces": [
-    "packages/*",
-    "apps/*"
-  ],
+  "description": "AI-powered job search co-pilot \u2014 track, match and optimize applications from discovery to offer.",
+  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
+    "setup": "tsx scripts/setup.ts",
+    "dev": "concurrently -n api,web -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:full": "concurrently -n db,api,web -c gray,yellow,cyan \"npm:db:local\" \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "npm run dev -w apps/api",
     "dev:web": "npm run dev -w apps/web",
-    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:ml": "cd ml-service && .venv/bin/uvicorn src.main:app --reload --host 0.0.0.0 --port 5000",
+    "build": "npm run build -w packages/shared && npm run build -w apps/web && npm run build -w apps/api",
     "build:api": "npm run build -w apps/api",
     "build:web": "npm run build -w apps/web",
+    "start": "npm run start -w apps/api",
+    "db:local": "tsx scripts/local-db.ts start",
+    "db:local:stop": "tsx scripts/local-db.ts stop",
+    "db:local:status": "tsx scripts/local-db.ts status",
     "db:generate": "npm run db:generate -w apps/api",
     "db:push": "npm run db:push -w apps/api",
+    "db:migrate": "npm run db:migrate -w apps/api",
+    "db:seed": "tsx scripts/seed.ts",
     "db:studio": "npm run db:studio -w apps/api",
+    "smoke": "node scripts/smoke-api.mjs",
+    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "test": "npm run test -w packages/shared && npm run test -w apps/api && npm run test -w apps/web",
+    "test:ml": "cd ml-service && .venv/bin/python -m pytest -q",
     "lint": "biome check .",
     "lint:fix": "biome check --apply .",
-    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w apps/api && npm run typecheck -w apps/web"
+    "check": "npm run typecheck && npm run lint && npm run test"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
+    "@types/node": "^22.10.0",
     "concurrently": "^9.1.0",
-    "typescript": "^5.8.0"
+    "drizzle-orm": "^0.45.2",
+    "embedded-postgres": "^17.5.0-beta.15",
+    "pg": "^8.13.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

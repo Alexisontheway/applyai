@@ -1,7 +1,11 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "vcs": { "enabled": false },
-  "organizeImports": { "enabled": true },
+  "vcs": {
+    "enabled": false
+  },
+  "organizeImports": {
+    "enabled": true
+  },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
@@ -24,5 +28,17 @@
       "trailingCommas": "all",
       "semicolons": "always"
     }
+  },
+  "files": {
+    "ignore": [
+      "node_modules",
+      "dist",
+      "**/dist/**",
+      ".tmp",
+      ".localdb",
+      "ml-service/.venv",
+      "apps/web/public",
+      "coverage"
+    ]
   }
 }

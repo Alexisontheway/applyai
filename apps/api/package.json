@@ -1,23 +1,26 @@
 {
   "name": "@applyai/api",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node --import tsx dist/index.js",
+    "build": "tsc --noEmit",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio",
-    "typecheck": "tsc --noEmit"
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@applyai/shared": "*",
     "@hono/node-server": "^2.0.10",
     "@hono/zod-validator": "^0.4.0",
     "better-auth": "^1.2.0",
-    "drizzle-orm": "^0.40.0",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.7.0",
     "pg": "^8.13.0",
     "tsx": "^4.19.0",
@@ -25,7 +28,8 @@
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",
-    "drizzle-kit": "^0.30.0",
-    "typescript": "^5.8.0"
+    "drizzle-kit": "^0.31.4",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
   }
 }

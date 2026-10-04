@@ -1,179 +1,314 @@
-import { Briefcase, Compass, Loader2, MapPin, Search, Sparkles } from 'lucide-react';
+import { ScoreBadge, SkillChip } from '@/components/indicators';
+import { useToast } from '@/components/ui/Toast';
+import {
+  Badge,
+  Banner,
+  Button,
+  EmptyState,
+  Field,
+  Input,
+  Segmented,
+  Skeleton,
+  SkeletonList,
+} from '@/components/ui/primitives';
+import { SOURCE_LABELS, formatRelative } from '@/lib/format';
+import { useDiscoverySearch, useDiscoverySources, useResumes, useTrackJob } from '@/lib/queries';
+import { cn } from '@/lib/utils';
+import type { DiscoverySearchInput } from '@applyai/shared/schemas';
+import type { DiscoveredJob } from '@applyai/shared/types';
+import { Compass, ExternalLink, MapPin, RefreshCw, Search, Wifi } from 'lucide-react';
 import { useState } from 'react';
-import { api } from '../lib/api';
-
-interface DiscoveredJob {
-  id?: string;
-  url?: string;
-  title: string;
-  company: string;
-  location?: string;
-  source?: string;
-  saved?: boolean;
-}
 
 export default function JobScoutPage() {
+  const toast = useToast();
+  const { data: sources } = useDiscoverySources();
+  const { data: resumes } = useResumes();
+  const trackJob = useTrackJob();
+
   const [keywords, setKeywords] = useState('');
   const [location, setLocation] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [discoveredJobs, setDiscoveredJobs] = useState<DiscoveredJob[]>([]);
-  const [error, setError] = useState('');
+  const [remoteOnly, setRemoteOnly] = useState(false);
+  const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  const [limit, setLimit] = useState(30);
+  const [submitted, setSubmitted] = useState<DiscoverySearchInput | null>(null);
 
-  const handleSearch = async () => {
+  const search = useDiscoverySearch(submitted);
+  const activeResume = resumes?.find((resume) => resume.isActive);
+
+  const runSearch = () => {
     if (!keywords.trim()) return;
-
-    setIsSearching(true);
-    setError('');
-    setDiscoveredJobs([]);
-
-    try {
-      const result = await api.post<{ data: DiscoveredJob[] }>('/jobs/scrape', {
-        keywords: keywords.trim(),
-        location: location.trim() || undefined,
-        maxResults: 20,
-      });
-      setDiscoveredJobs(result.data || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Scraping failed');
-    } finally {
-      setIsSearching(false);
-    }
+    setSubmitted({
+      keywords: keywords.trim(),
+      location: location.trim() || null,
+      remoteOnly,
+      sources: selectedSources.length > 0 ? selectedSources : undefined,
+      limit,
+      score: true,
+    });
   };
 
-  const handleSaveJob = async (job: DiscoveredJob) => {
+  const toggleSource = (id: string) => {
+    setSelectedSources((current) =>
+      current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
+    );
+  };
+
+  const handleTrack = async (job: DiscoveredJob) => {
     try {
-      const jobRes = await api.post<{ id: string }>('/jobs', {
+      const result = await trackJob.mutateAsync({
         title: job.title,
         company: job.company,
-        location: job.location || null,
-        url: job.url || null,
-        source: job.source || 'scrape',
-        description: null,
-        techStack: null,
+        location: job.location,
+        url: job.url,
+        source: job.source,
+        description: job.description,
+        postedAt: job.postedAt,
+        status: 'saved',
+        score: true,
       });
-      // Create the application so it shows up in Pipeline
-      await api.post('/applications', { jobId: jobRes.id, status: 'saved' });
-      setDiscoveredJobs((prev) => prev.map((j) => (j.url === job.url ? { ...j, saved: true } : j)));
-    } catch {
-      // silently ignore duplicate saves
+      toast.success(
+        result.created ? `Tracking ${job.title}` : `Already tracking ${job.title}`,
+        result.match
+          ? `Match score ${Math.round(result.match.score)}% — open the drawer for the breakdown.`
+          : undefined,
+      );
+    } catch (error) {
+      toast.error('Could not track that job', error instanceof Error ? error.message : undefined);
     }
   };
 
+  const results = search.data;
+
   return (
-    <div>
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Job Scout</h1>
-          <p className="text-gray-500 text-sm mt-1">
-            AI-powered job discovery from LinkedIn, Indeed, and Naukri
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
-          <Sparkles size={14} />
-          <span>OSINT Engine</span>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight text-white">Job Scout</h1>
+        <p className="mt-1 text-sm text-zinc-500">
+          Searches public job APIs — Greenhouse, Lever, Ashby, Remotive, RemoteOK and Arbeitnow — in
+          parallel.
+        </p>
+      </header>
 
-      {/* Search Form */}
-      <div className="flex gap-3 mb-6">
-        <div className="flex-1 relative">
-          <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
-          <input
-            value={keywords}
-            onChange={(e) => setKeywords(e.target.value)}
-            placeholder="Job title, skills, or keywords (e.g. Frontend Developer)"
-            className="w-full bg-dark-800 border border-neon/10 text-white pl-11 pr-4 py-3 text-sm focus:border-neon/50 focus:outline-none"
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-          />
-        </div>
-        <input
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-          placeholder="Location (e.g. Remote, Bangalore)"
-          className="w-48 bg-dark-800 border border-neon/10 text-white px-4 py-3 text-sm focus:border-neon/50 focus:outline-none"
-          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-        />
-        <button
-          type="button"
-          onClick={handleSearch}
-          disabled={isSearching || !keywords.trim()}
-          className="flex items-center gap-2 bg-neon text-black px-6 py-3 text-sm font-semibold hover:bg-neon/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isSearching ? (
-            <>
-              <Loader2 size={16} className="animate-spin" />
-              Scraping...
-            </>
-          ) : (
-            <>
-              <Compass size={16} />
-              Discover
-            </>
-          )}
-        </button>
-      </div>
-
-      {error && (
-        <div className="border border-red-500/30 bg-red-500/5 p-4 mb-6 text-red-400 text-sm">
-          {error}
-        </div>
-      )}
-
-      {/* Results */}
-      {discoveredJobs.length > 0 && (
-        <div className="space-y-3">
-          <p className="text-xs text-gray-500 mb-2">
-            {discoveredJobs.length} job{discoveredJobs.length > 1 ? 's' : ''} discovered
-          </p>
-          {discoveredJobs.map((job) => (
-            <div
-              key={job.url || job.title}
-              className="border border-neon/10 bg-dark-800/50 p-4 flex items-start justify-between gap-4 hover:border-neon/30 transition-colors"
+      <div className="border border-white/8 bg-dark-800/40 p-5 space-y-4">
+        <div className="grid gap-3 lg:grid-cols-[2fr_1fr_auto]">
+          <Field label="Keywords">
+            <div className="relative">
+              <Search
+                size={14}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+              />
+              <Input
+                value={keywords}
+                onChange={(event) => setKeywords(event.target.value)}
+                onKeyDown={(event) => event.key === 'Enter' && runSearch()}
+                placeholder="e.g. frontend engineer, machine learning, platform"
+                className="pl-9"
+              />
+            </div>
+          </Field>
+          <Field label="Location">
+            <Input
+              value={location}
+              onChange={(event) => setLocation(event.target.value)}
+              onKeyDown={(event) => event.key === 'Enter' && runSearch()}
+              placeholder="Remote / Berlin / Bengaluru"
+            />
+          </Field>
+          <div className="flex items-end">
+            <Button
+              variant="primary"
+              size="lg"
+              icon={<Compass size={16} />}
+              loading={search.isFetching}
+              disabled={!keywords.trim()}
+              onClick={runSearch}
             >
-              <div className="flex-1 min-w-0">
-                <h3 className="text-white font-medium text-sm truncate">{job.title}</h3>
-                <p className="text-gray-400 text-xs mt-1">{job.company}</p>
-                <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
-                  {job.location && (
-                    <span className="flex items-center gap-1">
-                      <MapPin size={12} />
-                      {job.location}
-                    </span>
-                  )}
-                  {job.source && (
-                    <span className="flex items-center gap-1">
-                      <Briefcase size={12} />
-                      {job.source}
-                    </span>
-                  )}
-                </div>
-              </div>
+              Discover
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-400">
+            <input
+              type="checkbox"
+              checked={remoteOnly}
+              onChange={(event) => setRemoteOnly(event.target.checked)}
+              className="accent-neon"
+            />
+            Remote only
+          </label>
+          <Segmented
+            value={String(limit)}
+            onChange={(value) => setLimit(Number(value))}
+            options={[
+              { value: '15', label: '15' },
+              { value: '30', label: '30' },
+              { value: '60', label: '60' },
+            ]}
+          />
+          <span className="text-xs text-zinc-600">
+            {activeResume
+              ? `Preview scores use “${activeResume.label}”.`
+              : 'Add an active resume to preview match scores.'}
+          </span>
+        </div>
+
+        {sources && sources.length > 0 ? (
+          <div>
+            <p className="label-micro mb-2">Sources</p>
+            <div className="flex flex-wrap gap-1.5">
+              {sources.map((source) => {
+                const isSelected =
+                  selectedSources.length === 0 || selectedSources.includes(source.id);
+                return (
+                  <button
+                    key={source.id}
+                    type="button"
+                    title={source.description}
+                    onClick={() => toggleSource(source.id)}
+                    className={cn(
+                      'border px-2.5 py-1 text-xs transition-colors',
+                      isSelected
+                        ? 'border-neon/30 bg-neon/8 text-neon'
+                        : 'border-white/10 text-zinc-500 hover:border-white/25 hover:text-white',
+                    )}
+                  >
+                    {source.label}
+                    {source.boardCount !== undefined ? (
+                      <span className="ml-1.5 text-[10px] text-zinc-600">{source.boardCount}</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+            {selectedSources.length === 0 ? (
+              <p className="mt-2 text-[11px] text-zinc-600">
+                All sources selected. Click one to narrow the search.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {results && results.errors.length > 0 ? (
+        <Banner tone="warning" title="Some sources did not respond">
+          <ul className="space-y-0.5">
+            {results.errors.map((providerError) => (
+              <li key={providerError.source}>
+                {providerError.source}: {providerError.message}
+              </li>
+            ))}
+          </ul>
+        </Banner>
+      ) : null}
+
+      {search.isFetching ? (
+        <SkeletonList count={5} className="h-20" />
+      ) : search.isError ? (
+        <Banner tone="error" title="Search failed">
+          {search.error.message}
+        </Banner>
+      ) : results ? (
+        results.jobs.length === 0 ? (
+          <EmptyState
+            icon={<Compass size={22} />}
+            title="No matches in those sources"
+            description={`Searched ${results.sourcesUsed.length} sources in ${Math.round(results.tookMs / 100) / 10}s. Try broader keywords, drop the location filter, or enable more sources.`}
+          />
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-zinc-500">
+              <span>
+                {results.jobs.length} jobs · {results.sourcesUsed.length} sources ·{' '}
+                {(results.tookMs / 1000).toFixed(1)}s
+              </span>
               <button
                 type="button"
-                onClick={() => handleSaveJob(job)}
-                disabled={job.saved}
-                className={`shrink-0 px-4 py-2 text-xs font-medium transition-colors ${
-                  job.saved
-                    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                    : 'bg-neon/10 text-neon border border-neon/20 hover:bg-neon/20'
-                }`}
+                onClick={() => search.refetch()}
+                className="inline-flex items-center gap-1 text-zinc-500 transition-colors hover:text-neon"
               >
-                {job.saved ? 'Saved' : '+ Save'}
+                <RefreshCw size={12} /> Refresh
               </button>
             </div>
-          ))}
-        </div>
-      )}
 
-      {!isSearching && discoveredJobs.length === 0 && !error && (
-        <div className="border border-neon/10 bg-dark-800/30 p-16 text-center">
-          <p className="text-gray-500">
-            No jobs discovered yet. Enter keywords and hit Discover to start.
-          </p>
-          <p className="text-gray-600 text-sm mt-2">
-            Scrapes LinkedIn, Indeed, Naukri, and company career pages automatically.
-          </p>
-        </div>
+            {results.jobs.map((job) => (
+              <div
+                key={`${job.source}-${job.externalId}`}
+                className="border border-white/8 bg-dark-800/30 p-4 transition-colors hover:border-white/20"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-medium text-white">{job.title}</h3>
+                      {job.matchScore !== null && job.matchScore !== undefined ? (
+                        <span className="inline-flex items-center gap-1 border border-white/10 bg-white/5 px-1.5 py-0.5">
+                          <ScoreBadge score={job.matchScore} />
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 text-sm text-zinc-400">{job.company}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500">
+                      {job.location ? (
+                        <span className="inline-flex items-center gap-1">
+                          <MapPin size={11} />
+                          {job.location}
+                        </span>
+                      ) : null}
+                      {job.remote ? (
+                        <span className="inline-flex items-center gap-1 text-neon/70">
+                          <Wifi size={11} />
+                          Remote
+                        </span>
+                      ) : null}
+                      <span>{SOURCE_LABELS[job.source]}</span>
+                      {job.salary ? (
+                        <span className="text-emerald-300/80">{job.salary}</span>
+                      ) : null}
+                      {job.postedAt ? <span>posted {formatRelative(job.postedAt)}</span> : null}
+                    </div>
+                    {job.tags.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {job.tags.slice(0, 6).map((tag) => (
+                          <SkillChip key={`${job.externalId}-${tag}`} label={tag} />
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    {job.alreadyTracked ? (
+                      <Badge tone="emerald">Tracked</Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => handleTrack(job)}
+                        loading={trackJob.isPending && trackJob.variables?.url === job.url}
+                      >
+                        Track
+                      </Button>
+                    )}
+                    <a
+                      href={job.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="inline-flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-neon"
+                    >
+                      Open posting <ExternalLink size={10} />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
+        <EmptyState
+          icon={<Compass size={22} />}
+          title="Search live job boards"
+          description="Enter keywords and hit Discover. Results come straight from public APIs — no scraping, no API keys. Preview scores use your active resume."
+        />
       )}
     </div>
   );

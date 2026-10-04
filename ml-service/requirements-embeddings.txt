@@ -1,0 +1,7 @@
+# Optional: semantic matching. Pulls in PyTorch (~2GB) — install only if you
+# want embedding similarity on top of the default taxonomy + TF-IDF engine.
+#
+#   pip install -r requirements-embeddings.txt
+#
+# The service and the API both work without it.
+sentence-transformers==3.4.*
