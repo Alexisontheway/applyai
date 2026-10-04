@@ -150,7 +150,7 @@ it was fixed, and each has a test or a recorded probe behind it.
 
 - **Symptom:** `vitest run` → `No test files found`, exit code 1.
 - **Cause:** the script existed, the tests never did.
-- **Fix:** 69 tests across four workspaces (see §5).
+- **Fix:** 70 tests across four workspaces (see §5).
 
 ### 4.6 Other defects found and fixed
 
@@ -160,12 +160,74 @@ it was fixed, and each has a test or a recorded probe behind it.
 | Four TypeScript errors in the API | `tsc` did not compile — the API could only ever run through `tsx` | Corrected the call signatures; `typecheck` is part of `check` |
 | `0000_minor_bushwacker.sql` migration was stale/non-appliable | A fresh database could not be built from migrations | Regenerated as `0000_overjoyed_magma.sql` and verified with a full push |
 | `scripts/setup.ts` started Postgres in-process | The database died the moment setup exited, so `npm run dev` hit a dead DB | Setup spawns a detached `db:local` process and polls until it accepts connections |
+| `scripts/setup.ts` adopted *any* Postgres already listening on the port | It happily pushed this schema into a database another project owned (or an older ApplyAI's), and drizzle-kit then died half-way through `ALTER TABLE` | Setup only adopts a cluster it can prove is this repo's (`postmaster.pid`/state file); otherwise it refuses, names the foreign tables it found, and suggests a free port. `npm run db:reset` rebuilds a database you confirm is yours |
 | Duplicate application row in `scripts/seed-data.ts` | The demo account showed ten applications where nine were intended | Removed |
 | URL importer surfaced raw transport errors | `{"error":"fetch failed"}` for private/blocked postings | Translated into an actionable message; covered by tests |
 | Location dedupe compared case-sensitively | "Berlin, berlin" could reach the UI | Case-insensitive dedupe + regression test |
 | Biome linted build output (17 786 diagnostics) and 134 real lint errors remained | `npm run lint` was unusable as a gate | `files.ignore` for build output; fixed the real findings (index keys, `<label>` semantics, `<dialog>`, exhaustive deps) — now zero errors |
 | Dead code: `ml-service/src/{matcher,scraper}.py`, `apps/web/src/components/RootLayout.tsx`, stray re-exports | Confusing for anyone reading the repo; `matcher.py`/`scraper.py` imported libraries that are not installed | Deleted; the working implementations live in `apps/api/src/match/` and `apps/api/src/discovery/` |
 | Local DB cluster (`.localdb/`) and scratch files were not ignored | `git add -A` would have committed a 40 MB Postgres cluster | Added to `.gitignore` |
+
+### 4.7 What a second machine (real Windows run) exposed
+
+The repair was developed and verified on Linux; the same steps were then run on a
+Windows machine with Node 24 / npm 12. Three things showed up that the first pass
+had not covered — all three are now fixed or documented.
+
+**a) npm 12 blocks dependency install scripts by default.** The install printed
+`6 packages had install scripts blocked`, and nothing failed: npm 12 skips
+lifecycle scripts for anything not listed in `package.json`'s `allowScripts`, and
+exits 0. Two of the blocked packages matter to this project (`esbuild` and
+`@embedded-postgres/windows-x64`).
+
+- `package.json` now declares `allowScripts` for every install-script package in
+  the lockfile (`esbuild`, `fsevents`, `@biomejs/biome`, all
+  `@embedded-postgres/*` platform packages), so a fresh clone is quiet on npm 12
+  and unchanged on npm 10/11, which ignore the field.
+- The Postgres half is a non-issue, and that is verifiable rather than assumed:
+  `@embedded-postgres/windows-x64` ships real `initdb.exe`/`pg_ctl.exe` files and
+  its `pg-symlinks.json` manifest is `[]`, so the blocked postinstall
+  (`hydrate-symlinks.js`) has nothing to hydrate on Windows. Vite starting
+  successfully in the same run proves `esbuild` was fine too.
+
+**b) A leftover database from an older ApplyAI was adopted.** The machine already
+had a Postgres listening on 5433, created by a previous version of this project
+(it contained `analytics_events` and a `resumes` table without `file_name`). The
+old setup script saw "the port answers", assumed it was its own, and pushed the
+new schema over it. `drizzle-kit push` crashed mid-way with
+`TypeError: Cannot read properties of undefined (reading 'columns')` inside
+`preparePgAlterColumns`, leaving the database half-migrated, and the seed then
+died on `42703 column "file_name" of relation "resumes" does not exist`. The user
+was told "Setup complete" anyway, because setup only looked at whether the child
+processes were *spawned*, not how they exited.
+
+Three fixes, all in `scripts/`:
+
+- `setup.ts` verifies the cluster is ours (a live `postmaster.pid` under
+  `.localdb/`, or the docker-compose container) before adopting it. A reachable
+  database it cannot claim stops the run with the tables it found and three
+  concrete options.
+- Exit codes are honoured: a failed schema push or a failed seed exits non-zero
+  instead of printing "Setup complete".
+- `npm run db:reset` was added (drop `public` → push → seed) for databases that
+  are already broken, with a `--yes` guard so it never wipes a remote or a
+  stranger's localhost database by default. Verified against a deliberately
+  stale database: the guard refuses, `--yes` rebuilds it in place, and the
+  result has the 11 current tables, `resumes.file_name`, and the demo data.
+
+**c) The web entry file vanished from the working tree.** Vite failed with
+`Failed to load url /src/main.tsx (resolved id: D:/.../apps/web/src/main.tsx) in
+.../index.css. Does the file exist?` — five times, once per reload. The file is
+committed (121 files in this change include it) and present in a fresh clone.
+Deleting it here reproduced the message byte for byte, so the diagnosis is not
+speculation: the file was genuinely missing on disk. The likely culprit is the
+cloud-synced checkout path (`D:\_Organized\...`, which OneDrive manages), and
+the one-line recovery is `git checkout -- apps/web/src/main.tsx`. The README now
+tells Windows users to keep the checkout outside OneDrive.
+
+None of this changes the Linux-side verification below; it is the reason the
+guides now distinguish "the repo is broken" from "this machine has leftovers",
+which is the difference between the two failure modes a new user actually hits.
 
 ---
 
@@ -199,6 +261,14 @@ through the ML service, and every page rendered with real data.
 
 `npm run smoke` (scripts/smoke-api.mjs) re-runs that lifecycle probe against
 whatever instance `API_URL` points at.
+
+**Made it recoverable.** Most people meet this project on a machine that already
+has leftovers, so the failure paths are first-class too: `npm run db:local:status`
+says what is running and where it came from, `npm run db:reset` rebuilds a
+database in place, `npm run setup -- --port <n>` starts a second independent one,
+and setup refuses to touch anything it cannot prove is its own. `npm run check`
+now also typechecks the root `scripts/` — that is the first code anyone runs, and
+it had no coverage at all before.
 
 ---
 

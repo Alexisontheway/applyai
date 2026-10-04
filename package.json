@@ -22,14 +22,16 @@
     "db:push": "npm run db:push -w apps/api",
     "db:migrate": "npm run db:migrate -w apps/api",
     "db:seed": "tsx scripts/seed.ts",
+    "db:reset": "tsx scripts/reset-db.ts",
     "db:studio": "npm run db:studio -w apps/api",
     "smoke": "node scripts/smoke-api.mjs",
-    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "typecheck": "npm run typecheck:scripts && npm run typecheck -w packages/shared && npm run typecheck -w apps/api && npm run typecheck -w apps/web",
     "test": "npm run test -w packages/shared && npm run test -w apps/api && npm run test -w apps/web",
     "test:ml": "cd ml-service && .venv/bin/python -m pytest -q",
     "lint": "biome check .",
     "lint:fix": "biome check --apply .",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "typecheck:scripts": "tsc --noEmit -p scripts/tsconfig.json"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
@@ -44,5 +46,18 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "fsevents": true,
+    "@biomejs/biome": true,
+    "@embedded-postgres/linux-x64": true,
+    "@embedded-postgres/linux-arm64": true,
+    "@embedded-postgres/linux-arm": true,
+    "@embedded-postgres/linux-ia32": true,
+    "@embedded-postgres/linux-ppc64": true,
+    "@embedded-postgres/darwin-x64": true,
+    "@embedded-postgres/darwin-arm64": true,
+    "@embedded-postgres/windows-x64": true
   }
 }

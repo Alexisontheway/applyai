@@ -3,34 +3,49 @@
  *
  * Runs in the foreground so `concurrently` can manage it alongside the API and
  * the web client: `npm run dev:full`.
+ *
+ * It only ever manages *this repo's* cluster (`.localdb/`). If the port is held
+ * by another Postgres, it says so instead of connecting to it.
  */
 import {
-  DEFAULT_LOCAL_DB,
   isReachable,
   localConnectionString,
+  portTakenMessage,
+  resolveLocalDbConfig,
+  runningClusterPort,
   startLocalDatabase,
   stopLocalDatabase,
 } from './lib/local-db';
 
 const command = process.argv[2] ?? 'start';
-const connectionString = localConnectionString(DEFAULT_LOCAL_DB);
+const { config, source } = resolveLocalDbConfig();
+const connectionString = localConnectionString(config);
 
 async function main(): Promise<void> {
   if (command === 'status') {
     const reachable = await isReachable(connectionString);
-    console.log(
-      reachable ? `● running  ${connectionString}` : `○ stopped  (expected at ${connectionString})`,
-    );
-    process.exit(reachable ? 0 : 1);
+    const running = runningClusterPort();
+    if (reachable && running) {
+      console.log(`● running  ${connectionString}  (port from ${source})`);
+      process.exit(0);
+    }
+    if (reachable) {
+      console.log(`▲ ${portTakenMessage(config.port, null)}`);
+      process.exit(1);
+    }
+    console.log(`○ stopped  (expected at ${connectionString})`);
+    process.exit(1);
   }
 
   if (command === 'stop') {
-    await stopLocalDatabase();
-    console.log('○ local database stopped');
+    const stopped = await stopLocalDatabase();
+    console.log(
+      stopped ? '○ local database stopped' : '○ nothing of ours is running (no live postmaster)',
+    );
     return;
   }
 
-  const { alreadyRunning } = await startLocalDatabase(DEFAULT_LOCAL_DB);
+  const { alreadyRunning } = await startLocalDatabase(config);
   console.log(
     alreadyRunning
       ? `● local database already running: ${connectionString}`
@@ -50,6 +65,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error('local database error:', error instanceof Error ? error.message : error);
+  console.error(`\n✗ ${error instanceof Error ? error.message : error}`);
   process.exit(1);
 });
